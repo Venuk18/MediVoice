@@ -1,68 +1,118 @@
 # MediVoice AI — Voice-First Hospital Operations Platform
-## Phase 1 & Phase 2 Complete: Text-First AI Agent
 
-**Hospital**: Aarogya One Hospital (Fictional Tertiary Care Multi-Specialty Hospital, Bengaluru)  
-**Challenge**: Great Indian AI Internship Challenge  
-**Status**: Phase 1 Foundation & Phase 2 Text-First AI Agent Fully Implemented & 37/37 Pytest Tests Passing  
+**Hospital:** Aarogya One Hospital (fictional multispecialty hospital in Bengaluru)  
+**Challenge:** Great Indian AI Internship Challenge  
+**Status:** Phase 1 backend foundation and Phase 2 text-first AI agent implemented. The reported backend test suite passes 37/37 tests.
 
----
+MediVoice AI is a hospital operations assistant designed to streamline doctor discovery, appointment scheduling, lab order tracking, and operational workflows. It currently uses a deterministic mock reasoning adapter, allowing development and testing without external AI API credits.
 
-### Key Deliverables in Phase 2 (Text-First AI Agent)
+## Phase 1: Backend Foundation
 
-1. **Stateful Conversation Manager (`backend/app/agent/conversation_manager.py`)**:
-   - Manages multi-turn conversation sessions (`session_id`).
-   - Identifies and prompts turn-by-turn for missing booking parameters (doctor, slot, reason, patient reference).
-   - Strict session isolation: patient references and drafts never leak across sessions.
-   - Tied to exact draft fingerprint: changing doctor, slot, reason, or patient ID immediately invalidates previous confirmations (`STALE`).
+### Architecture
 
-2. **Reasoning Model Adapter (`backend/app/agent/adapters.py`)**:
-   - Clean provider-agnostic interface (`BaseReasoningAdapter`) allowing future integration with Gnani AI, Evon, Gemini, etc.
-   - Deterministic `MockReasoningAdapter` for zero external API credit consumption and reproducible test execution.
+- **FastAPI:** REST API and OpenAPI documentation.
+- **SQLAlchemy 2.x:** Database models supporting PostgreSQL and SQLite.
+- **Pydantic v2:** Request validation and structured responses.
+- **Alembic:** Database migrations.
+- **Pytest:** Automated backend tests.
 
-3. **Restricted Allowlisted Tool Router (`backend/app/agent/tool_router.py`)**:
-   - Strictly allowlists only 3 backend tools: `search_doctors`, `get_available_slots`, `book_appointment`.
-   - Blocks unauthorized tools and direct SQL / database execution attempts.
-   - Validates argument schemas strictly before invoking backend services.
+### Key capabilities
 
-4. **Explicit Confirmation Gate**:
-   - The AI agent is prohibited from executing `book_appointment` until all 4 parameters are present AND the patient explicitly confirms ("YES" / "CONFIRM").
-   - Re-validates slot availability inside the transactional backend booking service.
-   - Reports success only after database transaction commits and returns the confirmed appointment.
+- Eight database models covering hospitals, departments, doctors, appointment slots, appointments, lab orders, workflow exceptions, and audit events.
+- Transactional appointment booking and database constraints to prevent double booking.
+- Doctor and appointment-slot discovery.
+- Appointment cancellation and completion.
+- Lab order status tracking.
+- Deterministic detection and management of overdue lab workflows.
+- Synthetic demo data for Aarogya One Hospital.
 
-5. **Phase 2 Agent API (`backend/app/api/v1/agent.py`)**:
-   - `POST /api/v1/agent/chat`: Multi-turn chat with slot filling and confirmation gating.
-   - `GET /api/v1/agent/sessions/{session_id}`: Inspect session state.
-   - `POST /api/v1/agent/sessions/{session_id}/reset`: Reset session state.
+## Phase 2: Text-First AI Agent
 
-6. **Automated Test Suite (11 New Tests, 37 Total Passing)**:
-   - Covers: tool allowlist & argument validation, doctor search, slot discovery, missing details prompts, confirmation gating, stale confirmation invalidation, duplicate confirmation handling, session isolation, unavailable slot conflicts, and transactional DB booking.
+### Agent components
 
----
+- **Conversation manager:** Maintains multi-turn conversation state and prompts for missing appointment details.
+- **Reasoning adapter:** Provider-independent interface with a deterministic mock implementation.
+- **Restricted tool router:** Allows only approved doctor search, slot discovery, and appointment booking tools.
+- **Confirmation gate:** Requires explicit patient confirmation of the pending booking before executing the booking operation.
+- **Booking verification:** Uses the existing transactional service and reports success only after the booking operation succeeds.
+- **Session isolation:** Keeps conversation drafts and patient references isolated between sessions.
 
-### Key Deliverables in Phase 1 (Foundation)
+### Agent API endpoints
 
-1. **Modular Backend Architecture**: FastAPI server with PostgreSQL/SQLite declarative models (`backend/app/models/`).
-2. **Database Integrity & Constraints**: `uq_appointment_slot_id` unique constraint preventing double booking.
-3. **Transactional Services**: Atomic slot locking and audit event generation in `backend/app/services/`.
-4. **Synthetic Seed Data**: Aarogya One Hospital synthetic seed in `backend/scripts/seed_data.py`.
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/v1/agent/chat` | Send a message to the agent |
+| GET | `/api/v1/agent/sessions/{session_id}` | Inspect conversation state |
+| POST | `/api/v1/agent/sessions/{session_id}/reset` | Reset a conversation session |
 
----
+The current session store is in memory. Sessions are lost on server restart and are not shared between multiple backend workers.
 
-### Verification & Local Commands
+## Technology Stack
+
+- Frontend: React, TypeScript, Vite
+- Backend: Python, FastAPI, Pydantic
+- Database: SQLAlchemy with SQLite/PostgreSQL support
+- Migrations: Alembic
+- Testing: Pytest
+
+## Setup on Windows PowerShell
+
+### 1. Install dependencies
 
 ```powershell
-# 1. Run full Pytest suite (37 tests across Phase 1 and Phase 2)
-$env:PYTHONPATH="backend"; $env:DATABASE_URL="sqlite:///aarogya_demo.db"; py -m pytest backend/tests/ -v
+py -m pip install -r backend/requirements.txt
+npm install
+```
 
-# 2. Run TypeScript check
+### 2. Configure the local database
+
+```powershell
+$env:PYTHONPATH="backend"
+$env:DATABASE_URL="sqlite:///aarogya_demo.db"
+```
+
+Use synthetic demo data only. Keep secrets in local environment files and never commit credentials.
+
+### 3. Run backend tests
+
+```powershell
+py -m pytest backend/tests/ -v
+```
+
+The latest reported test run completed with 37 passed tests and exit code 0. Re-run the suite to verify the current checkout.
+
+### 4. Run frontend checks
+
+```powershell
 npm run lint
-
-# 3. Build Vite production bundle
 npm run build
+```
 
-# 4. Start FastAPI server
-$env:PYTHONPATH="backend"; $env:DATABASE_URL="sqlite:///aarogya_demo.db"; py -m uvicorn app.main:app --app-dir backend --port 8000 --reload
+### 5. Start the backend
 
-# 5. Start Frontend Dev Server
+```powershell
+$env:PYTHONPATH="backend"
+$env:DATABASE_URL="sqlite:///aarogya_demo.db"
+py -m uvicorn app.main:app --app-dir backend --port 8000 --reload
+```
+
+### 6. Start the frontend
+
+Open another terminal at the project root:
+
+```powershell
 npm run dev
 ```
+
+Use the local URL printed by Vite. FastAPI's interactive API documentation is available at `http://localhost:8000/docs`.
+
+## Current Limitations and Future Work
+
+- The reasoning adapter is deterministic and does not yet provide genuine LLM reasoning.
+- Live Gnani AI/Evon integration and speech-to-text/text-to-speech are planned future enhancements.
+- The in-memory conversation store is suitable for an initial demo, not a multi-worker production deployment.
+- The project uses synthetic data and is not a production clinical decision-support system.
+
+## Project Safety
+
+MediVoice AI is an educational prototype. It must not be used as a substitute for clinical judgment or as a production system for real patient data.

@@ -1,4 +1,6 @@
+
 from fastapi import APIRouter
+
 from app.api.v1.hospitals import router as hospitals_router
 from app.api.v1.doctors import router as doctors_router
 from app.api.v1.appointments import router as appointments_router
