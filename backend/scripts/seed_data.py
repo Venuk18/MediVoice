@@ -145,24 +145,31 @@ def seed_database(db: Session, reset: bool = False):
     slot_count = 0
     slot_map = {}
 
-    for doc_def in doctor_defs:
+    for doc_idx, doc_def in enumerate(doctor_defs, start=1):
         doc_id = doc_def["id"]
+        slot_seq = 0
         # Generate 6 future slots for each doctor (days 1, 2, 3: morning 10am, afternoon 2pm)
         for day_offset in [1, 2, 3]:
             for hour in [10, 14]:
+                slot_seq += 1
+                deterministic_slot_id = f"slot-{doc_idx * 100 + slot_seq}"
                 slot_start = (now_utc + timedelta(days=day_offset)).replace(hour=hour)
                 slot_end = slot_start + timedelta(minutes=30)
                 slot_key = f"{doc_id}_{slot_start.strftime('%Y%m%d%H%M')}"
                 
                 existing_slot = db.scalars(
                     select(AppointmentSlot).where(
-                        AppointmentSlot.doctor_id == doc_id,
-                        AppointmentSlot.start_time == slot_start,
+                        (AppointmentSlot.id == deterministic_slot_id)
+                        | (
+                            (AppointmentSlot.doctor_id == doc_id)
+                            & (AppointmentSlot.start_time == slot_start)
+                        )
                     )
                 ).first()
 
                 if not existing_slot:
                     existing_slot = AppointmentSlot(
+                        id=deterministic_slot_id,
                         doctor_id=doc_id,
                         start_time=slot_start,
                         end_time=slot_end,
@@ -181,10 +188,10 @@ def seed_database(db: Session, reset: bool = False):
     # 1 COMPLETED appointment with follow-up recorded for Dr. Priya Nair
     # 1 CANCELLED appointment for Dr. Arvind Swamy
     
-    # Slot 1: Dr. Rajesh Sharma (Day 1 at 10:00) -> CONFIRMED
+    # Slot 1: Dr. Rajesh Sharma (Day 2 at 10:00 -> slot-103) -> CONFIRMED so slot-101 and slot-102 remain AVAILABLE
     dr_sharma_id = doctor_defs[0]["id"]
-    day1_10am_key = f"{dr_sharma_id}_{(now_utc + timedelta(days=1)).replace(hour=10).strftime('%Y%m%d%H%M')}"
-    slot1 = slot_map.get(day1_10am_key)
+    day2_sharma_10am_key = f"{dr_sharma_id}_{(now_utc + timedelta(days=2)).replace(hour=10).strftime('%Y%m%d%H%M')}"
+    slot1 = slot_map.get(day2_sharma_10am_key)
     
     appt1_id = "44444444-0001-0000-0000-000000000001"
     existing_appt1 = db.scalars(select(Appointment).where(Appointment.id == appt1_id)).first()

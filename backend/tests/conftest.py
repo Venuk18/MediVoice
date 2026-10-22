@@ -41,7 +41,14 @@ def db_session():
 
 @pytest.fixture(scope="function")
 def client(db_session):
-    """FastAPI TestClient with overridden get_db dependency."""
+    """FastAPI TestClient with overridden get_db dependency and offline MockReasoningAdapter default."""
+    from app.agent.conversation_manager import conversation_manager
+    from app.agent.adapters import MockReasoningAdapter
+
+    previous_adapter = conversation_manager.adapter
+    conversation_manager.adapter = MockReasoningAdapter()
+    conversation_manager._sessions.clear()
+
     def override_get_db():
         try:
             yield db_session
@@ -52,6 +59,9 @@ def client(db_session):
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+    conversation_manager.adapter = previous_adapter
+    conversation_manager._sessions.clear()
+
 
 
 @pytest.fixture

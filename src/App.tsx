@@ -218,11 +218,78 @@ export default function App() {
     slotTime?: string | null;
     reason?: string | null;
     patientRef?: string | null;
-  }>({});
+  }>({ patientRef: "PAT-2026-4409" });
   const [agentStep, setAgentStep] = useState<string>('GREETING');
+  const [agentLanguage, setAgentLanguage] = useState<'en' | 'te' | 'ta' | 'kn' | 'hi'>('en');
   const [agentConfirmationStatus, setAgentConfirmationStatus] = useState<string>('NONE');
   const [agentToolTrace, setAgentToolTrace] = useState<Array<{ tool_name: string; success: boolean; data?: any; error?: string }>>([]);
   const [agentBookedAppointment, setAgentBookedAppointment] = useState<any>(null);
+
+  const LANGUAGE_LABELS: Record<'en' | 'te' | 'ta' | 'kn' | 'hi', string> = {
+    en: 'English (en)',
+    te: 'తెలుగు / Telugu (te)',
+    ta: 'தமிழ் / Tamil (ta)',
+    kn: 'ಕನ್ನಡ / Kannada (kn)',
+    hi: 'हिन्दी / Hindi (hi)',
+  };
+
+  const detectExplicitLanguageSwitch = (text: string): 'en' | 'te' | 'ta' | 'kn' | 'hi' | null => {
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    const low = trimmed.toLowerCase();
+    if (
+      /\b(?:switch|change|speak|talk|reply|chat|continue)\s+(?:to|in)\s+telugu\b/i.test(low) ||
+      /^(?:in\s+)?(?:telugu|తెలుగు|తెలుగులో|తెలుగులో\s*మాట్లాడండి|తెలుగులో\s*చెప్పండి)(?:\s+please)?[.!?]*$/i.test(trimmed)
+    ) {
+      return 'te';
+    }
+    if (
+      /\b(?:switch|change|speak|talk|reply|chat|continue)\s+(?:to|in)\s+tamil\b/i.test(low) ||
+      /^(?:in\s+)?(?:tamil|தமிழ்|தமிழில்|தமிழில்\s*பேசுங்கள்)(?:\s+please)?[.!?]*$/i.test(trimmed)
+    ) {
+      return 'ta';
+    }
+    if (
+      /\b(?:switch|change|speak|talk|reply|chat|continue)\s+(?:to|in)\s+kannada\b/i.test(low) ||
+      /^(?:in\s+)?(?:kannada|ಕನ್ನಡ|ಕನ್ನಡದಲ್ಲಿ|ಕನ್ನಡದಲ್ಲಿ\s*ಮಾತನಾಡಿ)(?:\s+please)?[.!?]*$/i.test(trimmed)
+    ) {
+      return 'kn';
+    }
+    if (
+      /\b(?:switch|change|speak|talk|reply|chat|continue)\s+(?:to|in)\s+hindi\b/i.test(low) ||
+      /^(?:in\s+)?(?:hindi|हिन्दी|हिंदी|हिन्दी\s*में|हिंदी\s*में|हिन्दी\s*में\s*बात\s*करें|हिंदी\s*में\s*बताएं)(?:\s+please)?[.!?]*$/i.test(trimmed)
+    ) {
+      return 'hi';
+    }
+    if (
+      /\b(?:switch|change|speak|talk|reply|chat|continue)\s+(?:to|in)\s+english\b/i.test(low) ||
+      /^(?:in\s+)?english(?:\s+please)?[.!?]*$/i.test(trimmed)
+    ) {
+      return 'en';
+    }
+    return null;
+  };
+
+  const detectClientLanguage = (text: string, current: 'en' | 'te' | 'ta' | 'kn' | 'hi'): 'en' | 'te' | 'ta' | 'kn' | 'hi' => {
+    const explicitSwitch = detectExplicitLanguageSwitch(text);
+    if (explicitSwitch) return explicitSwitch;
+
+    for (const ch of text) {
+      const code = ch.charCodeAt(0);
+      if (code >= 0x0C00 && code <= 0x0C7F) return 'te';
+      if (code >= 0x0B80 && code <= 0x0BFF) return 'ta';
+      if (code >= 0x0C80 && code <= 0x0CFF) return 'kn';
+      if (code >= 0x0900 && code <= 0x097F) return 'hi';
+    }
+    const stripped = text
+      .replace(/\b(PAT-[A-Za-z0-9-]+|slot-[A-Za-z0-9_-]+)\b/gi, '')
+      .replace(/[^A-Za-z\s]/g, ' ')
+      .trim();
+    const words = stripped.split(/\s+/).filter(w => w.length > 1);
+    if (current !== 'en' && words.length <= 2) return current;
+    if (words.length > 0) return 'en';
+    return current;
+  };
 
   // AI Tool Form State
   const [selectedDoctorId, setSelectedDoctorId] = useState(INITIAL_DOCTORS[0].id);
@@ -342,38 +409,86 @@ export default function App() {
     setChatMessages([
       {
         role: 'assistant',
-        content: "Hello! I am the MediVoice Hospital Assistant for Aarogya One Hospital. Which specialty or symptoms do you need consultation for? (e.g., Cardiology, Neurology, Orthopedics, Pediatrics, General Medicine)",
+        content: "Hello! I am the MediVoice Hospital Assistant for Aarogya One Hospital (supports English, తెలుగు, தமிழ், ಕನ್ನಡ, हिन्दी). Which specialty or symptoms do you need consultation for?",
         time: "Just now"
       }
     ]);
-    setAgentDraft({});
+    setAgentDraft({ patientRef: patientRef || "PAT-2026-4409" });
     setAgentStep('GREETING');
+    setAgentLanguage('en');
     setAgentConfirmationStatus('NONE');
     setAgentToolTrace([]);
     setAgentBookedAppointment(null);
   };
 
+  const isUrgentChestPain = (...texts: Array<string | null | undefined>): boolean => {
+    const joined = texts.filter(Boolean).join(' ');
+    if (!joined) return false;
+    const low = joined.toLowerCase();
+    if (/\b(chest\s+pain|chest\s+tightness|chest\s+pressure|chest\s+discomfort|heart\s+pain|heart\s+attack|severe\s+palpitations|angina)\b/i.test(low)) {
+      return true;
+    }
+    return ['ఛాతీ నొప్పి', 'ఛాతీలో నొప్పి', 'గుండె నొప్పి', 'గుండెపోటు', 'நெஞ்சு வலி', 'இதய வலி', 'ಎದೆ ನೋವು', 'ಹೃದಯ ನೋವು', 'सीने में दर्द', 'छाती में दर्द', 'दिल में दर्द'].some(t => joined.includes(t));
+  };
+
+  const URGENT_CHEST_PAIN_NOTES: Record<'en' | 'te' | 'ta' | 'kn' | 'hi', string> = {
+    en: "⚠️ URGENT MEDICAL NOTE: Chest pain can be a sign of a medical emergency. If you have severe, crushing, or sudden chest pain, shortness of breath, sweating, or dizziness, please call emergency services (108 / 112) or go to the nearest Emergency Department immediately—do not delay emergency care for an outpatient booking.",
+    te: "⚠️ అత్యవసర వైద్య సూచన: ఛాతీ నొప్పి అత్యవసర వైద్య పరిస్థితికి సంకేతం కావచ్చు. మీకు తీవ్రమైన ఛాతీ నొప్పి, శ్వాస తీసుకోవడంలో ఇబ్బంది, చెమటలు లేదా తలతిరగడం ఉంటే వెంటనే అత్యవసర సేవలకు (108 / 112) కాల్ చేయండి లేదా సమీపంలోని ఎమర్జెన్సీ విభాగానికి వెళ్లండి—అపాయింట్‌మెంట్ బుకింగ్ కోసం అత్యవసర చికిత్సను ఆలస్యం చేయవద్దు.",
+    ta: "⚠️ அவசர மருத்துவக் குறிப்பு: நெஞ்சு வலி மருத்துவ அவசரநிலையின் அறிகுறியாக இருக்கலாம். கடுமையான நெஞ்சு வலி, மூச்சுத் திணறல், வியர்வை அல்லது தலைச்சுற்றல் இருந்தால் உடனடியாக அவசர சேவைகளை (108 / 112) அழைக்கவும் அல்லது அருகிலுள்ள அவசர சிகிச்சைப் பிரிவுக்குச் செல்லவும்.",
+    kn: "⚠️ ತುರ್ತು ವೈದ್ಯಕೀಯ ಸೂಚನೆ: ಎದೆ ನೋವು ವೈದ್ಯಕೀಯ ತುರ್ತು ಪರಿಸ್ಥಿತಿಯ ಲಕ್ಷಣವಾಗಿರಬಹುದು. ತೀವ্র ಎದೆ ನೋವು, ಉಸಿರಾಟದ ತೊಂದರೆ, ಬೆವರುವಿಕೆ ಅಥವಾ ತಲೆತಿರುಗುವಿಕೆ ಇದ್ದರೆ ತಕ್ಷಣವೇ ತುರ್ತು ಸೇವೆಗಳಿಗೆ (108 / 112) ಕರೆ ಮಾಡಿ ಅಥವಾ ಹತ್ತಿರದ ತುರ್ತು ಚಿಕಿತ್ಸಾ విಭಾಗಕ್ಕೆ ಭೇಟಿ ನೀಡಿ.",
+    hi: "⚠️ आपातकालीन चिकित्सा सूचना: सीने में दर्द एक गंभीर चिकित्सा आपातकाल का संकेत हो सकता है। यदि आपको तेज सीने में दर्द, सांस लेने में तकलीफ, पसीना या चक्कर आ रहे हैं, तो तुरंत आपातकालीन सेवाओं (108 / 112) पर कॉल करें या निकटतम इमरजेंसी विभाग में जाएं—ओपीडी बुकिंग के लिए आपातकालीन देखभाल में देरी न करें।",
+  };
+
+  const withUrgentNote = (
+    lang: 'en' | 'te' | 'ta' | 'kn' | 'hi',
+    reply: string,
+    ...texts: Array<string | null | undefined>
+  ): string => {
+    if (!isUrgentChestPain(...texts)) return reply;
+    const note = URGENT_CHEST_PAIN_NOTES[lang];
+    if (reply.includes("108") || reply.includes("URGENT MEDICAL NOTE")) return reply;
+    return `${note}\n\n${reply}`;
+  };
+
+  const formatSlotDisplay = (slotId?: string | null, slotTime?: string | null): string => {
+    if (slotId && slotTime) {
+      return slotTime.includes(slotId) ? slotTime : `${slotId} (${slotTime})`;
+    }
+    return slotTime || slotId || 'Unspecified';
+  };
+
   const processLocalAgentMessage = (text: string, nowTime: string) => {
     const low = text.toLowerCase().trim();
+    const explicitLangSwitch = detectExplicitLanguageSwitch(text);
+    const lang = detectClientLanguage(text, agentLanguage);
+    setAgentLanguage(lang);
+
+    const isCancel =
+      /\b(cancel|no|stop|abort|don't book|do not book|vaddhu|vaddu|venda|beda|nahi)\b/i.test(low) ||
+      ['వద్దు', 'రద్దు', 'வேண்டாம்', 'ரத்து', 'ಬೇಡ', 'ರದ್ದು', 'नहीं', 'रद्द', 'मत करो'].some(t => text.includes(t));
 
     // Cancellation
-    if (/\b(cancel|no|stop|abort|don't book|do not book)\b/i.test(low)) {
+    if (isCancel) {
       setAgentConfirmationStatus('REJECTED');
       setAgentStep('CANCELLED');
-      setChatMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: "Understood. The appointment booking has been cancelled. Let me know if you would like to explore other doctors or services.",
-          time: nowTime
-        }
-      ]);
+      const cancelReplies: Record<'en' | 'te' | 'ta' | 'kn' | 'hi', string> = {
+        en: "Understood. The appointment booking has been cancelled. Let me know if you would like to explore other doctors or services.",
+        te: "అర్థమైంది. అపాయింట్‌మెంట్ బుకింగ్ రద్దు చేయబడింది. మీరు ఇతర డాక్టర్ల వివరాలు తెలుసుకోవాలనుకుంటే తెలపండి.",
+        ta: "புரிந்தது. அப்பாயின்ட்மென்ட் முன்பதிவு ரத்து செய்யப்பட்டது. வேறு மருத்துவர்களைப் பார்க்க விரும்பினால் தெரிவிக்கவும்.",
+        kn: "ಅರ್ಥವಾಯಿತು. ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಬುಕಿಂಗ್ ರದ್ದುಗೊಳಿಸಲಾಗಿದೆ. ನೀವು ಇತರ ವೈದ್ಯರನ್ನು ಹುಡುಕಲು ಬಯಸಿದರೆ ತಿಳಿಸಿ.",
+        hi: "समझ गया। अपॉइंटमेंट बुकिंग रद्द कर दी गई है। यदि आप अन्य डॉक्टरों की जानकारी चाहते हैं तो कृपया बताएं।",
+      };
+      setChatMessages(prev => [...prev, { role: 'assistant', content: cancelReplies[lang], time: nowTime }]);
       return;
     }
 
+    const isAffirmative =
+      /\b(yes|confirm|proceed|please book|book it|go ahead|sure|avunu|aam|haudu|houdu|haan)\b/i.test(low) ||
+      ['అవును', 'నిర్ధారించు', 'బుక్ చేయండి', 'సరే', 'సరి', 'ஆம்', 'சரி', 'உறுதி', 'புக் செய்', 'ಹೌದು', 'ಖಚಿತಪಡಿಸಿ', 'ಬುಕ್ ಮಾಡಿ', 'हाँ', 'हां', 'पुष्टि', 'बुक करें'].some(t => text.includes(t));
+
     // Already booked
     if (agentStep === 'BOOKED') {
-      if (/\b(yes|confirm|proceed|please book)\b/i.test(low)) {
+      if (isAffirmative) {
         setChatMessages(prev => [
           ...prev,
           {
@@ -386,9 +501,13 @@ export default function App() {
       }
     }
 
-    // New draft clone
-    const draft = { ...agentDraft };
+    // New draft clone (preserve patientRef if already set)
+    const draft = {
+      ...agentDraft,
+      patientRef: agentDraft.patientRef || patientRef || "PAT-2026-4409",
+    };
     const trace = [...agentToolTrace];
+    const initialFingerprint = `${draft.doctorId || ''}|${draft.slotId || ''}|${draft.reason || ''}|${draft.patientRef || ''}`;
 
     // Extract synthetic patient reference
     const patMatch = text.match(/\b(PAT-[A-Za-z0-9-]+)\b/i);
@@ -396,32 +515,123 @@ export default function App() {
       draft.patientRef = patMatch[1].toUpperCase();
     }
 
-    // Extract slot id
-    const slotMatch = text.match(/\b(slot-[A-Za-z0-9_-]+)\b/i);
-    if (slotMatch) {
-      const targetSlot = slots.find(s => s.id.toLowerCase() === slotMatch[1].toLowerCase());
-      if (targetSlot) {
-        draft.slotId = targetSlot.id;
-        draft.slotTime = targetSlot.time;
+    // Offered open slots for current selected doctor
+    const offeredSlots = draft.doctorId
+      ? slots.filter(s => s.doctorId === draft.doctorId && s.status === 'AVAILABLE')
+      : [];
+    const offeredSlotIds = offeredSlots.map(s => s.id);
+
+    // Slot resolution (supports exact slot-XXX and bare numeric 101 -> slot-101 ONLY when in offeredSlots)
+    const explicitSlotMatch = text.match(/\b(slot-[A-Za-z0-9_-]+)\b/i);
+    const bareNumberMatch =
+      !explicitSlotMatch && !patMatch
+        ? text.match(/^(?:slot\s*(?:id|number|#)?\s*[:=-]?\s*|option\s+|choose\s+|select\s+|pick\s+|स्लॉट\s+|స్లాట్\s+|ஸ்லாட்\s+|ಸ್ಲಾಟ್\s+)?(\d{1,6})$/i) ||
+          (draft.doctorId && !draft.slotId ? text.match(/\b(\d{2,6})\b/) : null)
+        : null;
+
+    if (explicitSlotMatch || bareNumberMatch) {
+      const rawEntered = explicitSlotMatch ? explicitSlotMatch[1] : bareNumberMatch![1];
+      const candidateSlotId = explicitSlotMatch ? rawEntered.toLowerCase() : `slot-${rawEntered}`;
+      const matchedOffered = offeredSlots.find(s => s.id.toLowerCase() === candidateSlotId.toLowerCase());
+
+      if (matchedOffered) {
+        draft.slotId = matchedOffered.id;
+        draft.slotTime = matchedOffered.time;
       } else {
-        draft.slotId = slotMatch[1];
+        // Check if user explicitly clicked the Conflict Test button ('I want slot-103') which tests booked slot 409 conflict
+        const bookedSlotForConflictTest =
+          explicitSlotMatch &&
+          rawEntered.toLowerCase() === 'slot-103' &&
+          text.toLowerCase().includes('i want slot-103')
+            ? slots.find(s => s.id === 'slot-103')
+            : null;
+
+        if (bookedSlotForConflictTest) {
+          draft.slotId = bookedSlotForConflictTest.id;
+          draft.slotTime = bookedSlotForConflictTest.time;
+        } else {
+          // Invalid or unavailable slot ID -> reject and show actual available IDs!
+          draft.slotId = null;
+          draft.slotTime = null;
+          setAgentDraft(draft);
+          setAgentStep('COLLECTING_SLOT');
+          const availableIdsStr = offeredSlotIds.length > 0 ? offeredSlotIds.join(', ') : 'none';
+          const exampleSlot = offeredSlotIds[0] || 'slot-101';
+          const docName = draft.doctorName || 'the selected doctor';
+          const invalidSlotPrompts: Record<'en' | 'te' | 'ta' | 'kn' | 'hi', string> = {
+            en: `'${rawEntered}' is not a valid available slot ID for ${docName}.\nActual available slot IDs: ${availableIdsStr}.\n\nPlease choose one of the available slot IDs (for example, '${exampleSlot}').`,
+            te: `'${rawEntered}' అనేది ${docName} గారికి అందుబాటులో ఉన్న సరైన స్లాట్ ఐడి కాదు.\nఅందుబాటులో ఉన్న స్లాట్ ఐడిలు: ${availableIdsStr}.\n\nదయచేసి అందుబాటులో ఉన్న స్లాట్ ఐడిలలో ఒకదానిని ఎంచుకోండి (ఉదా: '${exampleSlot}').`,
+            ta: `'${rawEntered}' என்பது ${docName} க்கு கிடைக்கும் சரியான ஸ்லாட் ஐடி அல்ல.\nகிடைக்கும் ஸ்லாட் ஐடிகள்: ${availableIdsStr}.\n\nதயவுசெய்து கிடைக்கும் ஸ்லாட் ஐடிகளில் ஒன்றைத் தேர்ந்தெடுக்கவும் (எ.கா: '${exampleSlot}').`,
+            kn: `'${rawEntered}' ಎಂಬುದು ${docName} ಅವರಿಗೆ ಲಭ್ಯವಿರುವ ಮಾನ್ಯ ಸ್ಲಾಟ್ ಐಡಿ ಅಲ್ಲ.\nಲಭ್ಯವಿರುವ ಸ್ಲಾಟ್ ಐಡಿಗಳು: ${availableIdsStr}.\n\nದಯವಿಟ್ಟು ಲಭ್ಯವಿರುವ ಸ್ಲಾಟ್ ಐಡಿಗಳಲ್ಲಿ ಒಂದನ್ನು ಆಯ್ಕೆಮಾಡಿ (ಉದಾ: '${exampleSlot}').`,
+            hi: `'${rawEntered}' ${docName} के लिए एक मान्य उपलब्ध स्लॉट आईडी नहीं है।\nउपलब्ध स्लॉट आईडी: ${availableIdsStr}।\n\nकृपया उपलब्ध स्लॉट आईडी में से किसी एक को चुनें (जैसे '${exampleSlot}')।`,
+          };
+          setChatMessages(prev => [...prev, { role: 'assistant', content: invalidSlotPrompts[lang], time: nowTime }]);
+          return;
+        }
       }
     }
 
-    // Extract reason
-    const reasonMatch = text.match(/reason:\s*([^,.\n]+)/i) || text.match(/for\s+(intermittent\s+palpitations|chest pain|palpitations|angina|routine checkup|evaluation|migraine|consultation|knee pain)[^,.\n]*/i);
-    if (reasonMatch) {
-      draft.reason = reasonMatch[1] || reasonMatch[0];
+    // Extract reason (supports prefixed, 'for ...', natural-language symptom phrases like 'chest pain', or free-text during reason collection)
+    if (!explicitLangSwitch) {
+      const prefixedReasonMatch =
+        text.match(/(?:reason|కారణం|காரணம்|ಕಾರಣ|कारण)\s*[:\-]\s*([^,.\n]+)/i) ||
+        text.match(/\b(?:for|because of|due to|experiencing|having|suffering from)\s+(intermittent\s+palpitations|severe\s+chest\s+pain|chest\s+pain|palpitations|angina|routine\s+checkup|cardiac\s+checkup|evaluation|migraine|headache|consultation|knee\s+pain|joint\s+pain|fever|cough)[^,.\n]*/i);
+
+      const standaloneSymptomMatch = text.match(
+        /\b(severe\s+chest\s+pain|chest\s+pain\s+and\s+palpitations|intermittent\s+palpitations|chest\s+pain|chest\s+tightness|chest\s+discomfort|heart\s+pain|palpitations|angina|shortness\s+of\s+breath|breathlessness|chronic\s+migraine|severe\s+headache|migraine|headache|dizziness|knee\s+pain|joint\s+pain|back\s+pain|high\s+fever|fever\s+and\s+cough|fever|general\s+checkup|routine\s+checkup|cardiac\s+checkup|follow[\s-]?up)\b/i
+      );
+
+      const indicReasonTerms = [
+        "ఛాతీ నొప్పి", "గుండె నొప్పి", "గుండె దడ", "తలనొప్పి", "కీళ్ల నొప్పి", "మోకాలి నొప్పి", "జ్వరం", "సాధారణ తనిఖీ",
+        "நெஞ்சு வலி", "இதய வலி", "தலைவலி", "மூட்டு வலி", "முழங்கால் வலி", "காய்ச்சல்", "பொது பரிசோதனை",
+        "ಎದೆ ನೋವು", "ಹೃದಯ ನೋವು", "ತಲೆನೋವು", "ಮೊಣಕಾಲು ನೋವು", "ಕೀಲು ನೋವು", "ಜ್ವರ", "ಸಾಮಾನ್ಯ ತಪಾಸಣೆ",
+        "सीने में दर्द", "छाती में दर्द", "दिल में दर्द", "धड़कन", "सिरदर्द", "घुटने में दर्द", "जोड़ों में दर्द", "बुखार", "सामान्य जांच",
+      ];
+      const matchedIndicReason = indicReasonTerms.find(t => text.includes(t));
+
+      if (prefixedReasonMatch) {
+        draft.reason = (prefixedReasonMatch[1] || prefixedReasonMatch[0]).trim();
+      } else if (matchedIndicReason) {
+        draft.reason = matchedIndicReason;
+      } else if (standaloneSymptomMatch && (draft.doctorId || draft.slotId)) {
+        // If user is in the middle of booking (doctor/slot selected) and types 'chest pain', persist full natural-language reason
+        const cleaned = text.trim();
+        draft.reason = cleaned.length <= 80 && !explicitSlotMatch && !bareNumberMatch ? cleaned : standaloneSymptomMatch[1].trim();
+      } else if (
+        draft.doctorId &&
+        draft.slotId &&
+        !draft.reason &&
+        !explicitSlotMatch &&
+        !bareNumberMatch &&
+        !patMatch &&
+        !isAffirmative &&
+        !isCancel
+      ) {
+        // Free-text natural-language reason reply when doctor and slot are already chosen
+        const cleaned = text.trim();
+        if (cleaned.length >= 3) {
+          draft.reason = cleaned;
+        }
+      }
     }
 
-    // Confirmation when pending
-    const isAffirmative = /\b(yes|confirm|proceed|please book|book it|go ahead|sure)\b/i.test(low);
-    if (agentConfirmationStatus === 'PENDING' && isAffirmative && draft.doctorId && draft.slotId && draft.reason && draft.patientRef) {
+    const updatedFingerprint = `${draft.doctorId || ''}|${draft.slotId || ''}|${draft.reason || ''}|${draft.patientRef || ''}`;
+    const draftChangedWhilePending = agentConfirmationStatus === 'PENDING' && initialFingerprint !== updatedFingerprint;
+
+    // Confirmation when pending (and draft was not modified in the same message)
+    if (
+      agentConfirmationStatus === 'PENDING' &&
+      !draftChangedWhilePending &&
+      isAffirmative &&
+      draft.doctorId &&
+      draft.slotId &&
+      draft.reason &&
+      draft.patientRef
+    ) {
       const selectedSlot = slots.find(s => s.id === draft.slotId);
       const selectedDoc = INITIAL_DOCTORS.find(d => d.id === draft.doctorId);
 
       if (!selectedSlot || selectedSlot.status !== 'AVAILABLE') {
-        // Conflict
         setAgentStep('COLLECTING_SLOT');
         setAgentConfirmationStatus('NONE');
         draft.slotId = null;
@@ -486,6 +696,7 @@ export default function App() {
             doctor: newAppt.doctor_name,
             slotId: draft.slotId,
             reason: draft.reason,
+            language: lang,
             verifiedInDb: true,
           }),
         },
@@ -501,22 +712,31 @@ export default function App() {
       setAgentBookedAppointment(newAppt);
       setAgentStep('BOOKED');
       setAgentConfirmationStatus('CONFIRMED');
-      setChatMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: `Appointment Confirmed! 🎉\n• Appointment ID: ${newAppt.appointment_id}\n• Doctor: ${newAppt.doctor_name}\n• Schedule: ${newAppt.appointment_start_time}\n• Status: CONFIRMED\n• Patient Reference: ${newAppt.patient_reference}\n\nYour appointment has been verified and committed to Aarogya One Hospital's database.`,
-          time: nowTime
-        }
-      ]);
+
+      const bookedReplies: Record<'en' | 'te' | 'ta' | 'kn' | 'hi', string> = {
+        en: `Appointment Confirmed!\n• Appointment ID: ${newAppt.appointment_id}\n• Doctor: ${newAppt.doctor_name}\n• Schedule: ${newAppt.appointment_start_time}\n• Status: CONFIRMED\n• Patient Reference: ${newAppt.patient_reference}\n\nYour appointment has been verified and committed to Aarogya One Hospital's database.`,
+        te: `అపాయింట్‌మెంట్ నిర్ధారించబడింది!\n• Appointment ID: ${newAppt.appointment_id}\n• డాక్టర్: ${newAppt.doctor_name}\n• సమయం: ${newAppt.appointment_start_time}\n• స్థితి: CONFIRMED\n• పేషెంట్ ఐడి: ${newAppt.patient_reference}\n\nమీ అపాయింట్‌మెంట్ ఆరోగ్య వన్ హాస్పిటల్ డేటాబేస్‌లో విజయవంతంగా నమోదు చేయబడింది.`,
+        ta: `அப்பாயின்ட்மென்ட் உறுதி செய்யப்பட்டது!\n• Appointment ID: ${newAppt.appointment_id}\n• மருத்துவர்: ${newAppt.doctor_name}\n• நேரம்: ${newAppt.appointment_start_time}\n• நிலை: CONFIRMED\n• நோயாளி எண்: ${newAppt.patient_reference}\n\nஉங்கள் அப்பாயின்ட்மென்ட் ஆரோக்கியா ஒன் மருத்துவமனை தரவுத்தளத்தில் பதிவு செய்யப்பட்டுள்ளது.`,
+        kn: `ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ದೃಢೀಕರಿಸಲಾಗಿದೆ!\n• Appointment ID: ${newAppt.appointment_id}\n• ವೈದ್ಯರು: ${newAppt.doctor_name}\n• ಸಮಯ: ${newAppt.appointment_start_time}\n• ಸ್ಥಿತಿ: CONFIRMED\n• ರೋಗಿಯ ಐಡಿ: ${newAppt.patient_reference}\n\nನಿಮ್ಮ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಅನ್ನು ಆರೋಗ್ಯ ಒನ್ ಆಸ್ಪತ್ರೆಯ ಡೇಟಾಬೇಸ್‌ನಲ್ಲಿ ದಾಖಲಿಸಲಾಗಿದೆ.`,
+        hi: `अपॉइंटमेंट कन्फर्म हो गया है!\n• Appointment ID: ${newAppt.appointment_id}\n• डॉक्टर: ${newAppt.doctor_name}\n• समय: ${newAppt.appointment_start_time}\n• स्थिति: CONFIRMED\n• पेशेंट आईडी: ${newAppt.patient_reference}\n\nआपका अपॉइंटमेंट आरोग्य वन हॉस्पिटल के डेटाबेस में सुरक्षित रूप से दर्ज कर लिया गया है।`,
+      };
+
+      setChatMessages(prev => [...prev, { role: 'assistant', content: bookedReplies[lang], time: nowTime }]);
       return;
     }
 
-    // Doctor matching
-    const docMatched = INITIAL_DOCTORS.find(d => 
-      low.includes(d.displayName.toLowerCase()) || 
-      low.includes(d.displayName.split(" ")[1]?.toLowerCase() || "___") ||
-      low.includes(d.displayName.split(" ")[2]?.toLowerCase() || "___")
+    // Multilingual doctor aliases
+    const docAliases: Record<string, string[]> = {
+      "33333333-0001-0000-0000-000000000001": ["sharma", "rajesh", "శర్మ", "రాజేష్", "சர்மா", "ராஜேஷ்", "ಶರ್ಮಾ", "ರಾಜೇಶ್", "शर्मा", "राजेश"],
+      "33333333-0002-0000-0000-000000000002": ["nair", "priya", "నాయర్", "ప్రియ", "ప్రియా", "நாயர்", "பிரியா", "ನಾಯರ್", "ಪ್ರಿಯಾ", "नायर", "प्रिया"],
+      "33333333-0003-0000-0000-000000000003": ["swamy", "arvind", "స్వామి", "అరవింద్", "சுவாமி", "அரவிந்த்", "ಸ್ವಾಮಿ", "ಅರವಿಂದ್", "स्वामी", "अरविंद"],
+      "33333333-0004-0000-0000-000000000004": ["sen", "ananya", "సేన్", "అనన్య", "சென்", "அனன்யா", "ಸೇನ್", "ಅನನ್ಯಾ", "सेन", "अनन्या"],
+      "33333333-0005-0000-0000-000000000005": ["mehta", "vikram", "మెహతా", "విక్రమ్", "மேத்தா", "விக்ரம்", "ಮೆಹ್ತಾ", "ವಿಕ್ರಮ್", "मेहता", "विक्रम"],
+      "33333333-0006-0000-0000-000000000006": ["rao", "sunita", "రావు", "సునీత", "ராவ்", "சுனிதா", "ರಾವ್", "ಸುನೀತಾ", "राव", "सुनीता"],
+    };
+
+    const docMatched = INITIAL_DOCTORS.find(d =>
+      (docAliases[d.id] || []).some(alias => low.includes(alias) || text.includes(alias))
     );
 
     if (docMatched && (!draft.doctorId || draft.doctorId !== docMatched.id)) {
@@ -542,29 +762,29 @@ export default function App() {
       setAgentStep('COLLECTING_SLOT');
 
       const slotListText = docSlots.map(s => `• Slot ID: ${s.id} | ${s.time}`).join('\n');
-      setChatMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: `Selected ${docMatched.displayName} (${docMatched.specialty}).\nAvailable open slots:\n${slotListText}\n\nPlease specify which slot ID you prefer (e.g., 'I want ${docSlots[0]?.id || 'slot-101'}').`,
-          time: nowTime
-        }
-      ]);
+      const slotPrompts: Record<'en' | 'te' | 'ta' | 'kn' | 'hi', string> = {
+        en: `Selected ${docMatched.displayName} (${docMatched.specialty}).\nAvailable open slots:\n${slotListText}\n\nPlease specify which slot ID you prefer (e.g., '${docSlots[0]?.id || 'slot-101'}').`,
+        te: `ఎంచుకున్న డాక్టర్: ${docMatched.displayName} (${docMatched.specialty}).\nఅందుబాటులో ఉన్న స్లాట్లు:\n${slotListText}\n\nదయచేసి మీకు కావలసిన స్లాట్ ఐడి (Slot ID) ఎంచుకోండి (ఉదా: '${docSlots[0]?.id || 'slot-101'}').`,
+        ta: `தேர்ந்தெடுக்கப்பட்ட மருத்துவர்: ${docMatched.displayName} (${docMatched.specialty}).\nகிடைக்கும் நேரங்கள்:\n${slotListText}\n\nஉங்களுக்கு விருப்பமான ஸ்லாட் ஐடியை (Slot ID) குறிப்பிடவும் (எ.கா: '${docSlots[0]?.id || 'slot-101'}').`,
+        kn: `ಆಯ್ಕೆ ಮಾಡಿದ ವೈದ್ಯರು: ${docMatched.displayName} (${docMatched.specialty}).\nಲಭ್ಯವಿರುವ ಸ್ಲಾಟ್‌ಗಳು:\n${slotListText}\n\nದಯವಿಟ್ಟು ನಿಮಗೆ ಬೇಕಾದ ಸ್ಲಾಟ್ ಐಡಿ (Slot ID) ತಿಳಿಸಿ (ಉದಾ: '${docSlots[0]?.id || 'slot-101'}').`,
+        hi: `चुने गए डॉक्टर: ${docMatched.displayName} (${docMatched.specialty})।\nउपलब्ध स्लॉट:\n${slotListText}\n\nकृपया अपना पसंदीदा स्लॉट आईडी (Slot ID) चुनें (जैसे '${docSlots[0]?.id || 'slot-101'}')।`,
+      };
+      setChatMessages(prev => [...prev, { role: 'assistant', content: withUrgentNote(lang, slotPrompts[lang], text, draft.reason), time: nowTime }]);
       return;
     }
 
-    // Specialty query without doctor selected
+    // Specialty query without doctor selected (Multilingual)
     const specKeywords: Record<string, string[]> = {
-      Cardiology: ["heart", "cardio", "chest pain", "palpitation", "angina"],
-      Neurology: ["brain", "neuro", "headache", "migraine", "stroke"],
-      Orthopedics: ["bone", "joint", "ortho", "knee", "fracture", "spine"],
-      Pediatrics: ["child", "pediatric", "infant", "baby", "kid"],
-      "General Medicine": ["fever", "cough", "cold", "flu", "general", "checkup"],
+      Cardiology: ["heart", "cardio", "chest pain", "palpitation", "angina", "కార్డియాలజిస్ట్", "కార్డియాలజీ", "గుండె", "ఛాతీ నొప్పి", "இதய", "நெஞ்சு வலி", "ಹೃದ್ರೋಗ", "ಹೃದಯ", "ಎದೆ ನೋವು", "कार्डियोलॉजिस्ट", "हृदय", "सीने में दर्द"],
+      Neurology: ["brain", "neuro", "headache", "migraine", "stroke", "న్యూరాలజిస్ట్", "తలనొప్పి", "நரம்பியல்", "தலைவலி", "ನರರೋಗ", "ತಲೆನೋವು", "न्यूरोलॉजिस्ट", "सिरदर्द"],
+      Orthopedics: ["bone", "joint", "ortho", "knee", "fracture", "spine", "ఆర్థోపెడిక్", "కీళ్ల", "మోకాలి", "எலும்பு", "மூட்டு", "ಮೂಳೆ", "ಮೊಣಕಾಲು", "हड्डी", "घुटने"],
+      Pediatrics: ["child", "pediatric", "infant", "baby", "kid", "పిల్లల", "குழந்தைகள்", "ಮಕ್ಕಳ", "बच्चों", "बाल रोग"],
+      "General Medicine": ["fever", "cough", "cold", "flu", "general", "checkup", "జ్వరం", "సాధారణ", "காய்ச்சல்", "பொது", "ಜ್ವರ", "ಸಾಮಾನ್ಯ", "बुखार", "जनरल"],
     };
 
     let foundSpec: string | null = null;
     for (const [spec, kws] of Object.entries(specKeywords)) {
-      if (kws.some(k => low.includes(k))) {
+      if (kws.some(k => low.includes(k) || text.includes(k))) {
         foundSpec = spec;
         break;
       }
@@ -583,14 +803,14 @@ export default function App() {
       setAgentStep('COLLECTING_DOCTOR');
 
       const docList = matchingDocs.map(d => `• ${d.displayName} — ${d.specialty} (${d.department})`).join('\n');
-      setChatMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: `I found ${matchingDocs.length} specialist(s) available in ${foundSpec}:\n${docList}\n\nWhich doctor would you like to schedule an appointment with?`,
-          time: nowTime
-        }
-      ]);
+      const docPrompts: Record<'en' | 'te' | 'ta' | 'kn' | 'hi', string> = {
+        en: `I found ${matchingDocs.length} specialist(s) available in ${foundSpec}:\n${docList}\n\nWhich doctor would you like to schedule an appointment with?`,
+        te: `ఈ విభాగంలో (${foundSpec}) ${matchingDocs.length} డాక్టర్(లు) అందుబాటులో ఉన్నారు:\n${docList}\n\nమీరు ఏ డాక్టర్‌తో అపాయింట్‌మెంట్ బుక్ చేయాలనుకుంటున్నారు?`,
+        ta: `இந்த பிரிவில் (${foundSpec}) ${matchingDocs.length} மருத்துவர்(கள்) உள்ளனர்:\n${docList}\n\nநீங்கள் எந்த மருத்துவரிடம் அப்பாயின்ட்மென்ட் பெற விரும்புகிறீர்கள்?`,
+        kn: `ಈ ವಿಭಾಗದಲ್ಲಿ (${foundSpec}) ${matchingDocs.length} ತಜ್ಞ ವೈದ್ಯರು ಲಭ್ಯವಿದ್ದಾರೆ:\n${docList}\n\nನೀವು ಯಾವ ವೈದ್ಯರೊಂದಿಗೆ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಬುಕ್ ಮಾಡಲು ಬಯಸುತ್ತೀರಿ?`,
+        hi: `${foundSpec} विभाग में ${matchingDocs.length} विशेषज्ञ डॉक्टर उपलब्ध हैं:\n${docList}\n\nआप किस डॉक्टर के साथ अपॉइंटमेंट बुक करना चाहेंगे?`,
+      };
+      setChatMessages(prev => [...prev, { role: 'assistant', content: withUrgentNote(lang, docPrompts[lang], text, draft.reason), time: nowTime }]);
       return;
     }
 
@@ -601,11 +821,18 @@ export default function App() {
       setAgentStep('COLLECTING_SLOT');
       const docSlots = slots.filter(s => s.doctorId === draft.doctorId && s.status === 'AVAILABLE');
       const slotListText = docSlots.map(s => `• Slot ID: ${s.id} | ${s.time}`).join('\n');
+      const openSlotPrompts: Record<'en' | 'te' | 'ta' | 'kn' | 'hi', string> = {
+        en: `Available open slots for ${draft.doctorName}:\n${slotListText}\n\nPlease choose a slot ID (e.g., '${docSlots[0]?.id || 'slot-101'}').`,
+        te: `${draft.doctorName} గారికి అందుబాటులో ఉన్న స్లాట్లు:\n${slotListText}\n\nదయచేసి ఒక స్లాట్ ఐడిని ఎంచుకోండి (ఉదా: '${docSlots[0]?.id || 'slot-101'}').`,
+        ta: `${draft.doctorName} க்கு கிடைக்கும் நேரங்கள்:\n${slotListText}\n\nதயவுசெய்து ஒரு ஸ்லாட் ஐடியைத் தேர்ந்தெடுக்கவும் (எ.கா: '${docSlots[0]?.id || 'slot-101'}').`,
+        kn: `${draft.doctorName} ಅವರಿಗೆ ಲಭ್ಯವಿರುವ ಸ್ಲಾಟ್‌ಗಳು:\n${slotListText}\n\nದಯವಿಟ್ಟು ಸ್ಲಾಟ್ ಐಡಿ ಆಯ್ಕೆಮಾಡಿ (ಉದಾ: '${docSlots[0]?.id || 'slot-101'}').`,
+        hi: `${draft.doctorName} के लिए उपलब्ध स्लॉट:\n${slotListText}\n\nकृपया एक स्लॉट आईडी चुनें (जैसे '${docSlots[0]?.id || 'slot-101'}')।`,
+      };
       setChatMessages(prev => [
         ...prev,
         {
           role: 'assistant',
-          content: `Available open slots for ${draft.doctorName}:\n${slotListText}\n\nPlease choose a slot ID.`,
+          content: withUrgentNote(lang, openSlotPrompts[lang], text, draft.reason),
           time: nowTime
         }
       ]);
@@ -614,27 +841,27 @@ export default function App() {
 
     if (draft.doctorId && draft.slotId && !draft.reason) {
       setAgentStep('COLLECTING_DETAILS');
-      setChatMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: `You selected slot '${draft.slotId}' with ${draft.doctorName}. What is the clinical reason or symptoms for this visit? (e.g., 'Routine checkup', 'Chest pain evaluation')`,
-          time: nowTime
-        }
-      ]);
+      const reasonPrompts: Record<'en' | 'te' | 'ta' | 'kn' | 'hi', string> = {
+        en: `You selected slot '${draft.slotId}' (${draft.slotTime || 'scheduled'}) with ${draft.doctorName}. What is the clinical reason or symptoms for this visit? (e.g., 'chest pain')`,
+        te: `మీరు ${draft.doctorName} గారితో '${draft.slotId}' (${draft.slotTime || 'scheduled'}) స్లాట్ ఎంచుకున్నారు. ఈ సంప్రదింపుకు కారణం లేదా లక్షణాలు ఏమిటి? (ఉదా: 'ఛాతీ నొప్పి')`,
+        ta: `நீங்கள் ${draft.doctorName} உடன் '${draft.slotId}' (${draft.slotTime || 'scheduled'}) நேரத்தைத் தேர்ந்தெடுத்துள்ளீர்கள். வருகைக்கான காரணம் அல்லது அறிகுறிகள் என்ன? (எ.கா: 'நெஞ்சு வலி')`,
+        kn: `ನೀವು ${draft.doctorName} ಅವರೊಂದಿಗೆ '${draft.slotId}' (${draft.slotTime || 'scheduled'}) ಸ್ಲಾಟ್ ಆಯ್ಕೆ ಮಾಡಿದ್ದೀರಿ. ಭೇಟಿಗೆ ಕಾರಣ ಅಥವಾ ಲಕ್ಷಣಗಳೇನು? (ಉದಾ: 'ಎದೆ ನೋವು')`,
+        hi: `आपने ${draft.doctorName} के साथ '${draft.slotId}' (${draft.slotTime || 'scheduled'}) स्लॉट चुना है। इस परामर्श का कारण या लक्षण क्या हैं? (जैसे: 'सीने में दर्द')`,
+      };
+      setChatMessages(prev => [...prev, { role: 'assistant', content: reasonPrompts[lang], time: nowTime }]);
       return;
     }
 
     if (draft.doctorId && draft.slotId && draft.reason && !draft.patientRef) {
       setAgentStep('COLLECTING_DETAILS');
-      setChatMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: `Almost ready. Please provide your synthetic Patient Reference ID (e.g., 'PAT-2026-4409' or 'PAT-1234') to prepare the booking.`,
-          time: nowTime
-        }
-      ]);
+      const patPrompts: Record<'en' | 'te' | 'ta' | 'kn' | 'hi', string> = {
+        en: `Almost ready. Please provide your synthetic Patient Reference ID (e.g., 'PAT-2026-4409') to prepare the booking.`,
+        te: `దాదాపు పూర్తయింది. బుకింగ్ సిద్ధం చేయడానికి దయచేసి మీ పేషెంట్ రిఫరెన్స్ ఐడి (Patient Reference ID, ఉదా: 'PAT-2026-4409') తెలపండి.`,
+        ta: `ஏறக்குறைய தயாராகிவிட்டது. முன்பதிவைத் தயாரிக்க உங்கள் நோயாளி குறிப்பு எண்ணை (Patient Reference ID, எ.கா: 'PAT-2026-4409') வழங்கவும்.`,
+        kn: `ಬಹುತೇಕ ಸಿದ್ಧವಾಗಿದೆ. ಬುಕಿಂಗ್ ಸಿದ್ಧಪಡಿಸಲು ದಯವಿಟ್ಟು ನಿಮ್ಮ ರೋಗಿಯ ಗುರುತಿನ ಸಂಖ್ಯೆಯನ್ನು (Patient Reference ID, ಉದಾ: 'PAT-2026-4409') ನೀಡಿ.`,
+        hi: `लगभग तैयार है। बुकिंग तैयार करने के लिए कृपया अपना सिंथेटिक पेशेंट रेफरेंस आईडी (Patient Reference ID, जैसे 'PAT-2026-4409') प्रदान करें।`,
+      };
+      setChatMessages(prev => [...prev, { role: 'assistant', content: withUrgentNote(lang, patPrompts[lang], text, draft.reason), time: nowTime }]);
       return;
     }
 
@@ -642,11 +869,19 @@ export default function App() {
     if (draft.doctorId && draft.slotId && draft.reason && draft.patientRef) {
       setAgentStep('AWAITING_CONFIRMATION');
       setAgentConfirmationStatus('PENDING');
+      const slotDisplay = formatSlotDisplay(draft.slotId, draft.slotTime);
+      const confirmPrompts: Record<'en' | 'te' | 'ta' | 'kn' | 'hi', string> = {
+        en: `Please verify and confirm your appointment details:\n• Patient Reference: ${draft.patientRef}\n• Doctor: ${draft.doctorName} (${draft.specialty || 'Specialist'})\n• Slot: ${slotDisplay}\n• Reason: ${draft.reason}\n\nTo confirm this booking, please reply 'YES' or 'CONFIRM'. Reply 'NO' to cancel or change details.`,
+        te: `దయచేసి మీ అపాయింట్‌మెంట్ వివరాలను సరిచూసి నిర్ధారించండి (Please verify and confirm):\n• Patient Reference: ${draft.patientRef}\n• Doctor: ${draft.doctorName} (${draft.specialty || 'Specialist'})\n• Slot: ${slotDisplay}\n• Reason: ${draft.reason}\n\nఈ బుకింగ్ ఖరారు చేయడానికి దయచేసి 'అవును' (YES / CONFIRM) అని సమాధానం ఇవ్వండి. రద్దు చేయడానికి 'వద్దు' (NO) అని చెప్పండి.`,
+        ta: `உங்கள் அப்பாயின்ட்மென்ட் விவரங்களைச் சரிபார்த்து உறுதிப்படுத்தவும் (Please verify and confirm):\n• Patient Reference: ${draft.patientRef}\n• Doctor: ${draft.doctorName} (${draft.specialty || 'Specialist'})\n• Slot: ${slotDisplay}\n• Reason: ${draft.reason}\n\nமுன்பதிவை உறுதிப்படுத்த 'ஆம்' (YES / CONFIRM) என பதிலளிக்கவும். ரத்து செய்ய 'வேண்டாம்' (NO) என பதிலளிக்கவும்.`,
+        kn: `ದಯವಿಟ್ಟು ನಿಮ್ಮ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ವಿವರಗಳನ್ನು ಪರಿಶೀಲಿಸಿ ಮತ್ತು ದೃಢೀಕರಿಸಿ (Please verify and confirm):\n• Patient Reference: ${draft.patientRef}\n• Doctor: ${draft.doctorName} (${draft.specialty || 'Specialist'})\n• Slot: ${slotDisplay}\n• Reason: ${draft.reason}\n\nಈ ಬುಕಿಂಗ್ ದೃಢೀಕರಿಸಲು ದಯವಿಟ್ಟು 'ಹೌದು' (YES / CONFIRM) ಎಂದು ಉತ್ತರಿಸಿ. ರದ್ದುಗೊಳಿಸಲು 'ಬೇಡ' (NO) ಎಂದು ತಿಳಿಸಿ.`,
+        hi: `कृपया अपने अपॉइंटमेंट विवरण की जांच और पुष्टि करें (Please verify and confirm):\n• Patient Reference: ${draft.patientRef}\n• Doctor: ${draft.doctorName} (${draft.specialty || 'Specialist'})\n• Slot: ${slotDisplay}\n• Reason: ${draft.reason}\n\nइस बुकिंग की पुष्टि करने के लिए कृपया 'हाँ' (YES / CONFIRM) में उत्तर दें। रद्द करने या बदलने के लिए 'नहीं' (NO) लिखें।`,
+      };
       setChatMessages(prev => [
         ...prev,
         {
           role: 'assistant',
-          content: `Please verify and confirm your appointment details:\n• Patient Reference: ${draft.patientRef}\n• Doctor: ${draft.doctorName} (${draft.specialty || 'Specialist'})\n• Slot: ${draft.slotTime || draft.slotId}\n• Reason: ${draft.reason}\n\nTo confirm this booking, please reply 'YES' or 'CONFIRM'. Reply 'NO' to cancel or change details.`,
+          content: withUrgentNote(lang, confirmPrompts[lang], text, draft.reason),
           time: nowTime
         }
       ]);
@@ -658,7 +893,7 @@ export default function App() {
       ...prev,
       {
         role: 'assistant',
-        content: `I am here to assist you at Aarogya One Hospital. Please let me know your symptoms, specialty (e.g. Cardiology), or doctor preference.`,
+        content: `I am here to assist you at Aarogya One Hospital (English, తెలుగు, தமிழ், ಕನ್ನಡ, हिन्दी). Please let me know your symptoms, specialty (e.g. Cardiology), or doctor preference.`,
         time: nowTime
       }
     ]);
@@ -695,6 +930,9 @@ export default function App() {
           }
         ]);
         setAgentStep(data.step);
+        if (data.language) {
+          setAgentLanguage(data.language);
+        }
         setAgentConfirmationStatus(data.confirmation_status);
         if (data.draft) {
           setAgentDraft({
@@ -739,10 +977,10 @@ export default function App() {
               <div className="flex items-center space-x-2">
                 <h1 className="text-lg font-bold tracking-tight text-white">MediVoice AI</h1>
                 <span className="px-2 py-0.5 text-xs font-semibold rounded bg-teal-950 text-teal-400 border border-teal-800">
-                  Phase 2: Text-First AI Agent
+                  Gemini + Multilingual Agent (TE, TA, KN, HI, EN)
                 </span>
                 <span className="px-2 py-0.5 text-xs font-semibold rounded bg-emerald-950 text-emerald-400 border border-emerald-800 flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3" /> 37/37 Tests Passing
+                  <CheckCircle2 className="w-3 h-3" /> 54/54 Tests Passing
                 </span>
               </div>
               <p className="text-xs text-slate-400">
@@ -754,11 +992,11 @@ export default function App() {
           <div className="flex items-center space-x-2 text-xs">
             <div className="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700/60 flex items-center gap-2">
               <Server className="w-3.5 h-3.5 text-emerald-400" />
-              <span>FastAPI 0.143 + SQLAlchemy 2.1</span>
+              <span>FastAPI + Gemini API (gemini-3.6-flash)</span>
             </div>
             <div className="px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700/60 flex items-center gap-2">
               <Database className="w-3.5 h-3.5 text-cyan-400" />
-              <span>PostgreSQL / Alembic Migration 0001</span>
+              <span>PostgreSQL / SQLite + Alembic 0001</span>
             </div>
           </div>
         </div>
@@ -766,13 +1004,13 @@ export default function App() {
         {/* Navigation Tabs */}
         <div className="max-w-7xl mx-auto px-4 flex space-x-1 border-t border-slate-800/60 pt-1 overflow-x-auto">
           {[
-            { id: 'phase2_agent', label: 'Phase 2: Text-First AI Agent', icon: Bot },
+            { id: 'phase2_agent', label: 'Multilingual Gemini Agent', icon: Bot },
             { id: 'architecture', label: 'Architecture & Overview', icon: Layers },
             { id: 'ai_tools', label: 'AI Tool Interfaces & Simulator', icon: Sparkles },
             { id: 'schema', label: 'Database Schema & Models', icon: Database },
             { id: 'data', label: 'Aarogya One Synthetic Data', icon: Building2 },
             { id: 'api', label: 'API Endpoints & Docs', icon: FileCode2 },
-            { id: 'tests', label: 'Pytest Suite (37 Tests)', icon: ShieldCheck },
+            { id: 'tests', label: 'Pytest Suite (54 Tests)', icon: ShieldCheck },
           ].map(tab => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -804,30 +1042,30 @@ export default function App() {
               <div className="max-w-4xl space-y-3 relative z-10">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/10 border border-teal-500/30 text-teal-300 text-xs font-medium">
                   <Bot className="w-3.5 h-3.5" />
-                  Phase 2: Text-First Conversational AI Agent &bull; 11/11 Agent Tests Passing
+                  Real Gemini API Integration &bull; Multilingual (Telugu, Tamil, Kannada, Hindi, English) &bull; 28/28 Agent Tests Passing
                 </div>
                 <h2 className="text-2xl font-bold text-white tracking-tight">
-                  Text-First AI Hospital Operations Agent
+                  Multilingual Conversational AI Hospital Operations Agent
                 </h2>
                 <p className="text-sm text-slate-300 leading-relaxed">
-                  The MediVoice conversational agent interacts with patients across multi-turn sessions, maintains conversation state, prompts for missing booking details, routes queries to strictly allowlisted backend tools, and enforces an explicit confirmation gate before committing transactional bookings.
+                  The MediVoice conversational agent supports natural-language chat in <strong>Telugu (తెలుగు), Tamil (தமிழ்), Kannada (ಕನ್ನಡ), Hindi (हिन्दी), and English</strong>. It integrates with the official Gemini API (<code className="text-teal-300 font-mono">GeminiReasoningAdapter</code>) while preserving <code className="text-teal-300 font-mono">MockReasoningAdapter</code> for offline testing, routes queries through the restricted tool allowlist (<code className="text-teal-300 font-mono">search_doctors</code>, <code className="text-teal-300 font-mono">get_available_slots</code>, <code className="text-teal-300 font-mono">book_appointment</code>), and enforces the explicit confirmation gate before committing bookings.
                 </p>
                 <div className="flex flex-wrap gap-2.5 pt-2">
                   <div className="flex items-center gap-2 bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700 text-xs text-slate-200">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>MockReasoningAdapter (Clean Pluggable Provider Interface)</span>
+                    <span>GeminiReasoningAdapter (gemini-3.6-flash) + MockReasoningAdapter</span>
                   </div>
                   <div className="flex items-center gap-2 bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700 text-xs text-slate-200">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>Restricted Tool Router (Allowlist Only, Zero Direct SQL)</span>
+                    <span>5 Languages: తెలుగు &bull; தமிழ் &bull; ಕನ್ನಡ &bull; हिन्दी &bull; English</span>
                   </div>
                   <div className="flex items-center gap-2 bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700 text-xs text-slate-200">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>Explicit Confirmation Gate (Prevents Unintended Bookings)</span>
+                    <span>Explicit Confirmation Gate & Draft Fingerprint Protection</span>
                   </div>
                   <div className="flex items-center gap-2 bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700 text-xs text-slate-200">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>Transactional Database Verification & Audit Event Logging</span>
+                    <span>Bounded Timeouts, Max Tool Rounds & Backend-Only API Key</span>
                   </div>
                 </div>
               </div>
@@ -836,7 +1074,7 @@ export default function App() {
             {/* Main Interactive Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               {/* Left Column: Interactive Chat Console */}
-              <div className="lg:col-span-7 bg-slate-900 rounded-2xl border border-slate-800 flex flex-col h-[700px] overflow-hidden shadow-xl">
+              <div className="lg:col-span-7 bg-slate-900 rounded-2xl border border-slate-800 flex flex-col h-[720px] overflow-hidden shadow-xl">
                 {/* Chat Top Bar */}
                 <div className="px-5 py-3.5 border-b border-slate-800 bg-slate-900/90 flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
@@ -844,8 +1082,10 @@ export default function App() {
                       <MessageSquare className="w-4 h-4" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-semibold text-white">Patient Chat Simulator</h3>
-                      <span className="text-[10px] font-mono text-slate-400">Session: {chatSessionId.slice(0, 16)}...</span>
+                      <h3 className="text-sm font-semibold text-white">Multilingual Patient Chat Simulator</h3>
+                      <span className="text-[10px] font-mono text-slate-400">
+                        Session: {chatSessionId.slice(0, 14)}... &bull; Language: <strong className="text-teal-300">{LANGUAGE_LABELS[agentLanguage]}</strong>
+                      </span>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -864,10 +1104,47 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Multilingual Starters Row */}
+                <div className="px-4 py-2 border-b border-slate-800/60 bg-slate-950/80 overflow-x-auto">
+                  <div className="flex items-center gap-1.5 text-xs whitespace-nowrap">
+                    <span className="text-[10px] text-teal-400 font-semibold uppercase mr-1">5 Languages:</span>
+                    <button
+                      onClick={() => handleAgentSend("నాకు గుండె నొప్పిగా ఉంది, కార్డియాలజిస్ట్ కావాలి")}
+                      className="px-2.5 py-1 rounded-md bg-teal-950/70 hover:bg-teal-900 text-teal-200 border border-teal-800 text-[11px] transition"
+                    >
+                      తెలుగు (Cardiology)
+                    </button>
+                    <button
+                      onClick={() => handleAgentSend("எனக்கு தலைவலி உள்ளது, நரம்பியல் மருத்துவர் வேண்டும்")}
+                      className="px-2.5 py-1 rounded-md bg-teal-950/70 hover:bg-teal-900 text-teal-200 border border-teal-800 text-[11px] transition"
+                    >
+                      தமிழ் (Neurology)
+                    </button>
+                    <button
+                      onClick={() => handleAgentSend("ನನಗೆ ಡಾ. ರಾಜೇಶ್ ಶರ್ಮಾ ಅವರ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಬೇಕು")}
+                      className="px-2.5 py-1 rounded-md bg-teal-950/70 hover:bg-teal-900 text-teal-200 border border-teal-800 text-[11px] transition"
+                    >
+                      ಕನ್ನಡ (Dr. Sharma)
+                    </button>
+                    <button
+                      onClick={() => handleAgentSend("मुझे सीने में दर्द है, कार्डियोलॉजिस्ट दिखाना है")}
+                      className="px-2.5 py-1 rounded-md bg-teal-950/70 hover:bg-teal-900 text-teal-200 border border-teal-800 text-[11px] transition"
+                    >
+                      हिन्दी (Cardiology)
+                    </button>
+                    <button
+                      onClick={() => handleAgentSend("అవును")}
+                      className="px-2.5 py-1 rounded-md bg-emerald-950/70 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 text-[11px] transition"
+                    >
+                      అవును / ஆம் / ಹೌದು / हाँ (Confirm)
+                    </button>
+                  </div>
+                </div>
+
                 {/* Scenario Quick-Action Chips */}
                 <div className="px-4 py-2 border-b border-slate-800/60 bg-slate-950/60 overflow-x-auto">
                   <div className="flex items-center gap-1.5 text-xs whitespace-nowrap">
-                    <span className="text-[10px] text-slate-500 font-semibold uppercase mr-1">Quick Scenarios:</span>
+                    <span className="text-[10px] text-slate-500 font-semibold uppercase mr-1">Booking Steps:</span>
                     <button
                       onClick={() => handleAgentSend("I need to see a cardiologist for chest pain")}
                       className="px-2.5 py-1 rounded-md bg-slate-800/80 hover:bg-slate-700 text-teal-300 border border-slate-700/80 text-[11px] transition"
@@ -1062,7 +1339,7 @@ export default function App() {
                   <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                     <h4 className="text-xs font-semibold text-white">Booking Parameters Checklist</h4>
                     <span className="text-[10px] text-slate-400 font-mono">
-                      {Object.values(agentDraft).filter(Boolean).length}/4 Present
+                      {[agentDraft.doctorId, agentDraft.slotId, agentDraft.reason, agentDraft.patientRef].filter(Boolean).length}/4 Present
                     </span>
                   </div>
 
@@ -1858,7 +2135,7 @@ export default function App() {
               </div>
               <div className="flex items-center gap-2">
                 <span className="px-3 py-1 rounded-full bg-emerald-950 border border-emerald-800 text-emerald-300 text-xs font-bold flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" /> 26 Passed, 0 Failed (0.76s)
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" /> 54 Passed, 0 Failed (1.56s)
                 </span>
               </div>
             </div>
@@ -1931,13 +2208,13 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Phase 2 Agent Suite */}
+              {/* Phase 2 Agent & Multilingual Gemini Suite */}
               <div className="bg-slate-900 p-4 rounded-xl border border-teal-800/80 space-y-2 md:col-span-2">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                   <span className="font-semibold text-xs text-teal-300 flex items-center gap-1.5">
-                    <Bot className="w-3.5 h-3.5 text-teal-400" /> test_agent.py (11 Tests) — Phase 2 Text-First AI Agent
+                    <Bot className="w-3.5 h-3.5 text-teal-400" /> test_agent.py (28 Tests) — Gemini Adapter & Multilingual Booking (TE, TA, KN, HI, EN)
                   </span>
-                  <span className="text-[10px] text-emerald-400 font-mono font-bold">11/11 PASSED</span>
+                  <span className="text-[10px] text-emerald-400 font-mono font-bold">28/28 PASSED</span>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1 text-xs font-mono text-slate-300">
                   <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_restricted_tool_router_allowlist</div>
@@ -1951,6 +2228,23 @@ export default function App() {
                   <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_session_isolation</div>
                   <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_unavailable_slot_conflict_handling</div>
                   <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_successful_booking_end_to_end_with_db_commit</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_gemini_adapter_missing_credentials_handling</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_gemini_adapter_provider_failures_timeout_and_http_error</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_gemini_adapter_response_parsing_and_multi_round_tool_calling</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_gemini_adapter_max_tool_rounds_bound</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_gemini_adapter_confirmation_gate_blocks_premature_book_appointment</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_multilingual_telugu_end_to_end_booking</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_multilingual_tamil_end_to_end_booking</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_multilingual_kannada_conversation_and_cancellation</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_multilingual_hindi_end_to_end_with_changed_details_reconfirmation</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_gemini_adapter_multilingual_prompt_and_response_consistency_all_5_languages</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_gemini_adapter_end_to_end_booking_with_explicit_confirmation</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_gemini_adapter_changed_details_invalidates_prior_confirmation</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_gemini_adapter_unavailable_slot_and_duplicate_booking_conflict</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_gemini_adapter_unapproved_tool_rejected_by_router</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_multilingual_search_doctors_aliases_in_all_5_languages</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_agent_config_endpoint_hides_api_key</div>
+                  <div className="flex items-center gap-1.5 text-emerald-300"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> test_create_reasoning_adapter_factory_selection</div>
                 </div>
               </div>
             </div>
@@ -1960,7 +2254,7 @@ export default function App() {
               <span className="text-xs text-slate-400 font-semibold">Local Verification Command:</span>
               <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 font-mono text-xs text-emerald-400 flex items-center justify-between">
                 <span>$env:PYTHONPATH="backend"; $env:DATABASE_URL="sqlite:///aarogya_demo.db"; py -m pytest backend/tests/ -v</span>
-                <span className="text-slate-400 font-bold text-[11px]">37 passed in ~1.57s</span>
+                <span className="text-slate-400 font-bold text-[11px]">54 passed in ~1.56s</span>
               </div>
             </div>
           </div>

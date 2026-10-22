@@ -24,6 +24,13 @@ class Settings(BaseSettings):
         "postgresql+psycopg2://postgres:postgres@localhost:5432/aarogya_one_db"
     )
 
+    # AI Reasoning Provider Configuration (Backend-only; never exposed to client)
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "auto")
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+    GEMINI_TIMEOUT_SECONDS: float = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "15.0"))
+    GEMINI_MAX_TOOL_ROUNDS: int = int(os.getenv("GEMINI_MAX_TOOL_ROUNDS", "4"))
+
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
@@ -37,3 +44,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+

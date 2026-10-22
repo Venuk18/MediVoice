@@ -12,10 +12,21 @@ from app.agent.schemas import (
     ConversationStep,
     ConfirmationStatus,
     ToolCallIntent,
+    ToolExecutionResult,
 )
-from app.agent.adapters import BaseReasoningAdapter, MockReasoningAdapter, is_cancellation, is_affirmative
+from app.agent.adapters import (
+    BaseReasoningAdapter,
+    MockReasoningAdapter,
+    GeminiReasoningAdapter,
+    create_reasoning_adapter,
+    detect_language,
+    format_localized_message,
+    format_slot_display,
+    is_cancellation,
+    is_affirmative,
+    with_urgent_guidance_if_needed,
+)
 from app.agent.tool_router import RestrictedToolRouter
-from app.services.doctor_service import get_available_slots_tool
 
 
 class ConversationManager:
@@ -23,18 +34,13 @@ class ConversationManager:
     Stateful multi-turn conversation manager for MediVoice AI text agent.
     
     Responsibilities:
-    - Maintains conversation sessions and multi-turn context in an in-memory store.
+    - Maintains conversation sessions, language preference, and multi-turn context in an in-memory store.
     - Proactively prompts for missing booking details (doctor, slot, reason, patient reference).
     - Enforces explicit patient confirmation tied to the exact draft fingerprint before booking.
     - Invalidates previous confirmations if any booking parameter changes.
     - Protects session isolation: patient references and chats are never shared across sessions.
     - Executes allowlisted tools via RestrictedToolRouter with the active DB session.
     - Handles concurrent booking conflicts gracefully without fake success or duplicate appointments.
-    
-    Architecture Note on Session Store:
-    For this MVP, an in-memory dictionary is used for simplicity and test isolation.
-    Limitations: Not persistent across server restarts, not shared across multi-process workers.
-    Production systems should back this with Redis or a persistent session store.
     """
 
     def __init__(
@@ -43,7 +49,7 @@ class ConversationManager:
         adapter: Optional[BaseReasoningAdapter] = None,
     ):
         self.tool_router = tool_router or RestrictedToolRouter()
-        self.adapter = adapter or MockReasoningAdapter()
+        self.adapter = adapter or create_reasoning_adapter()
         self._sessions: Dict[str, AgentSessionState] = {}
 
     def get_or_create_session(
@@ -70,6 +76,39 @@ class ConversationManager:
             return True
         return False
 
+    def _hydrate_doctor_from_trace_or_db(self, db: Session, session: AgentSessionState, message: str) -> None:
+        """If user selects a doctor that was previously listed or matches a known doctor, populate doctor fields."""
+        if session.draft.doctor_id:
+            return
+        doc_query = self.adapter._detect_doctor_query(message)
+        if not doc_query:
+            return
+
+        # Check if doctor was already found in previous search_doctors tool_trace
+        for tr in reversed(session.tool_trace):
+            if tr.tool_name == "search_doctors" and tr.success and isinstance(tr.data, list):
+                for d in tr.data:
+                    if doc_query.lower() in str(d.get("display_name", "")).lower():
+                        session.draft.doctor_id = d["doctor_id"]
+                        session.draft.doctor_name = d["display_name"]
+                        session.draft.specialty = d["specialty"]
+                        return
+
+    def _hydrate_slot_from_trace(self, session: AgentSessionState) -> None:
+        """Populates slot_start_time if slot_id matches a slot returned in tool_trace."""
+        if not session.draft.slot_id:
+            return
+        for tr in reversed(session.tool_trace):
+            if tr.tool_name == "get_available_slots" and tr.success and isinstance(tr.data, list):
+                for s in tr.data:
+                    if s.get("slot_id") == session.draft.slot_id:
+                        session.draft.slot_start_time = s.get("start_time")
+                        if not session.draft.doctor_name and s.get("doctor_name"):
+                            session.draft.doctor_name = s.get("doctor_name")
+                        if not session.draft.specialty and s.get("specialty"):
+                            session.draft.specialty = s.get("specialty")
+                        return
+
     def process_message(
         self,
         db: Session,
@@ -79,13 +118,15 @@ class ConversationManager:
     ) -> ChatResponse:
         """
         Processes a patient message in an isolated session:
-        1. Updates conversation history and draft parameters.
+        1. Updates conversation history, language, and draft parameters.
         2. Validates confirmation status against draft fingerprint.
         3. Executes allowlisted tools when needed.
         4. Enforces the explicit confirmation gate before transactional booking.
         """
         session = self.get_or_create_session(session_id, patient_reference)
         session.last_active_at = datetime.now(timezone.utc).isoformat()
+        session.language = detect_language(message, session.language)
+        lang = session.language
 
         # Update synthetic patient reference if provided in payload and not yet set
         if patient_reference and not session.draft.patient_reference:
@@ -95,14 +136,16 @@ class ConversationManager:
         user_msg_record = ChatMessage(role="user", content=message)
         session.history.append(user_msg_record)
 
-        # Snapshot initial fingerprint before reasoning
+        # Snapshot initial state before reasoning
         initial_fingerprint = session.draft.get_fingerprint()
+        initial_confirmation_status = session.confirmation_status
+        initial_confirmed_fingerprint = session.confirmed_draft_fingerprint
 
         # Check for cancellation / abort intent first
         if is_cancellation(message):
             session.confirmation_status = ConfirmationStatus.REJECTED
             session.step = ConversationStep.CANCELLED
-            reply = "Understood. The appointment booking has been cancelled. Let me know if you would like to explore other doctors or services."
+            reply = format_localized_message(lang, "cancelled")
             session.history.append(ChatMessage(role="assistant", content=reply))
             return self._build_response(session, reply)
 
@@ -110,34 +153,221 @@ class ConversationManager:
         if session.step == ConversationStep.BOOKED:
             if is_affirmative(message):
                 appt_id = session.booked_appointment.get("appointment_id", "") if session.booked_appointment else ""
-                reply = (
-                    f"Your appointment is already confirmed and booked (Appointment ID: {appt_id}). "
-                    "If you need to book a new appointment, please reset the session or ask to start over."
-                )
+                reply = format_localized_message(lang, "already_booked", appt_id=appt_id)
                 session.history.append(ChatMessage(role="assistant", content=reply))
                 return self._build_response(session, reply)
 
+        # Pre-populate doctor from prior search trace if user selected one by name
+        self._hydrate_doctor_from_trace_or_db(db, session, message)
+
+        booking_attempted_in_turn = False
+        booking_gate_blocked_reason: Optional[str] = None
+        last_booking_result: Optional[ToolExecutionResult] = None
+        tools_executed_in_callback: List[str] = []
+
+        def execute_tool_from_adapter(intent: ToolCallIntent) -> ToolExecutionResult:
+            nonlocal booking_attempted_in_turn, booking_gate_blocked_reason, last_booking_result
+            t_name = intent.tool_name.strip()
+            tools_executed_in_callback.append(t_name)
+
+            if t_name == "book_appointment":
+                booking_attempted_in_turn = True
+                curr_fp = session.draft.get_fingerprint()
+
+                if not session.draft.is_complete():
+                    missing = session.draft.missing_fields()
+                    booking_gate_blocked_reason = f"Cannot book yet. Missing details: {', '.join(missing)}."
+                    return ToolExecutionResult(
+                        tool_name="book_appointment",
+                        success=False,
+                        error=booking_gate_blocked_reason,
+                    )
+
+                if initial_fingerprint != curr_fp or initial_confirmed_fingerprint != curr_fp:
+                    session.confirmation_status = ConfirmationStatus.PENDING
+                    session.confirmed_draft_fingerprint = curr_fp
+                    session.step = ConversationStep.AWAITING_CONFIRMATION
+                    booking_gate_blocked_reason = with_urgent_guidance_if_needed(
+                        lang,
+                        format_localized_message(
+                            lang,
+                            "changed_reconfirm",
+                            doctor_name=session.draft.doctor_name or "Specialist",
+                            slot_display=format_slot_display(session.draft.slot_id, session.draft.slot_start_time),
+                            reason_category=session.draft.reason_category,
+                            patient_reference=session.draft.patient_reference,
+                        ),
+                        message,
+                        session.draft.reason_category,
+                    )
+                    return ToolExecutionResult(
+                        tool_name="book_appointment",
+                        success=False,
+                        error="Confirmation invalidated because booking parameters changed. Explicit confirmation required.",
+                    )
+
+                if initial_confirmation_status != ConfirmationStatus.PENDING or not is_affirmative(message):
+                    booking_gate_blocked_reason = format_localized_message(lang, "explicit_confirm_required")
+                    return ToolExecutionResult(
+                        tool_name="book_appointment",
+                        success=False,
+                        error=booking_gate_blocked_reason,
+                    )
+
+                # Confirmed and validated -> execute via RestrictedToolRouter using verified draft fields
+                verified_intent = ToolCallIntent(
+                    tool_name="book_appointment",
+                    arguments={
+                        "patient_reference": session.draft.patient_reference,
+                        "doctor_id": session.draft.doctor_id,
+                        "selected_slot_id": session.draft.slot_id,
+                        "reason_category": session.draft.reason_category,
+                    },
+                )
+                tool_res = self.tool_router.execute_tool(db, verified_intent)
+                session.tool_trace.append(tool_res)
+                last_booking_result = tool_res
+
+                if tool_res.success:
+                    session.step = ConversationStep.BOOKED
+                    session.confirmation_status = ConfirmationStatus.CONFIRMED
+                    session.booked_appointment = tool_res.data
+                else:
+                    session.step = ConversationStep.COLLECTING_SLOT
+                    session.draft.slot_id = None
+                    session.draft.slot_start_time = None
+                    session.confirmation_status = ConfirmationStatus.NONE
+                    session.confirmed_draft_fingerprint = None
+
+                return tool_res
+
+            # Non-booking tools (search_doctors, get_available_slots, or rejected unauthorized tools)
+            tool_res = self.tool_router.execute_tool(db, intent)
+            session.tool_trace.append(tool_res)
+
+            if t_name == "search_doctors" and tool_res.success and tool_res.data:
+                docs = tool_res.data
+                is_doc_specific = self.adapter._detect_doctor_query(message) is not None and len(docs) > 0
+                if is_doc_specific:
+                    chosen_doc = docs[0]
+                    session.draft.doctor_id = chosen_doc["doctor_id"]
+                    session.draft.doctor_name = chosen_doc["display_name"]
+                    session.draft.specialty = chosen_doc["specialty"]
+                elif not session.draft.specialty and docs:
+                    session.draft.specialty = docs[0].get("specialty")
+
+            elif t_name == "get_available_slots" and tool_res.success and tool_res.data:
+                slots = tool_res.data
+                if slots:
+                    if not session.draft.doctor_id:
+                        session.draft.doctor_id = slots[0].get("doctor_id")
+                    if not session.draft.doctor_name:
+                        session.draft.doctor_name = slots[0].get("doctor_name")
+                    if not session.draft.specialty:
+                        session.draft.specialty = slots[0].get("specialty")
+
+            return tool_res
+
         # Plan action via reasoning adapter
+        # Pass tool_executor when using GeminiReasoningAdapter so multi-round tool calls execute within the turn
+        use_multi_round_callback = isinstance(self.adapter, GeminiReasoningAdapter)
         action: AgentAction = self.adapter.plan_and_respond(
             session_state=session,
             user_message=message,
             available_tools=list(self.tool_router.ALLOWED_TOOLS),
+            tool_executor=execute_tool_from_adapter if use_multi_round_callback else None,
         )
 
+        self._hydrate_slot_from_trace(session)
         current_fingerprint = session.draft.get_fingerprint()
 
-        # Requirement 3: If booking parameters changed while confirmation was pending, invalidate confirmation!
+        # Requirement: If booking parameters changed while confirmation was pending, invalidate confirmation!
         if (
-            session.confirmation_status in [ConfirmationStatus.PENDING, ConfirmationStatus.CONFIRMED]
+            initial_confirmation_status in [ConfirmationStatus.PENDING, ConfirmationStatus.CONFIRMED]
             and initial_fingerprint != current_fingerprint
         ):
             session.confirmation_status = ConfirmationStatus.STALE
             session.confirmed_draft_fingerprint = None
             session.step = ConversationStep.AWAITING_CONFIRMATION
 
-        # Handle tool call if requested by adapter
         final_reply = action.reply
-        if action.tool_call:
+
+        # If a Gemini turn received an explicit affirmative confirmation on an unchanged pending complete draft
+        # and the model replied without invoking book_appointment yet, trigger the booking gate now
+        if (
+            use_multi_round_callback
+            and not booking_attempted_in_turn
+            and action.tool_call is None
+            and initial_confirmation_status == ConfirmationStatus.PENDING
+            and initial_confirmed_fingerprint == current_fingerprint
+            and initial_fingerprint == current_fingerprint
+            and session.draft.is_complete()
+            and is_affirmative(message)
+        ):
+            action.tool_call = ToolCallIntent(
+                tool_name="book_appointment",
+                arguments={
+                    "patient_reference": session.draft.patient_reference,
+                    "doctor_id": session.draft.doctor_id,
+                    "selected_slot_id": session.draft.slot_id,
+                    "reason_category": session.draft.reason_category,
+                },
+            )
+
+        # If Gemini searched for a specific doctor and found 1 match but didn't chain get_available_slots yet
+        if (
+            use_multi_round_callback
+            and "search_doctors" in tools_executed_in_callback
+            and "get_available_slots" not in tools_executed_in_callback
+            and session.draft.doctor_id
+            and not session.draft.slot_id
+        ):
+            slot_intent = ToolCallIntent(
+                tool_name="get_available_slots",
+                arguments={"doctor_id": session.draft.doctor_id},
+            )
+            slot_res = self.tool_router.execute_tool(db, slot_intent)
+            session.tool_trace.append(slot_res)
+            if slot_res.success and slot_res.data:
+                slots = slot_res.data
+                slot_lines = "\n".join([f"• Slot ID: {s['slot_id']} | Start: {s['start_time']}" for s in slots[:5]])
+                final_reply = format_localized_message(
+                    lang,
+                    "selected_doctor_slots",
+                    doctor_name=session.draft.doctor_name or "Doctor",
+                    specialty=session.draft.specialty or "Specialist",
+                    slot_lines=slot_lines,
+                    example_slot=slots[0]["slot_id"],
+                )
+                session.step = ConversationStep.COLLECTING_SLOT
+
+        # Handle outcomes when booking was attempted inside multi-round callback
+        if booking_attempted_in_turn:
+            if booking_gate_blocked_reason:
+                final_reply = booking_gate_blocked_reason
+            elif last_booking_result is not None:
+                if last_booking_result.success and last_booking_result.data:
+                    d_res = last_booking_result.data
+                    # Ensure the reply clearly contains the committed appointment details
+                    if str(d_res.get("appointment_id", "")) not in final_reply:
+                        final_reply = format_localized_message(
+                            lang,
+                            "booking_confirmed",
+                            appointment_id=d_res.get("appointment_id"),
+                            doctor_name=d_res.get("doctor_name"),
+                            appointment_start_time=d_res.get("appointment_start_time"),
+                            appointment_status=d_res.get("appointment_status"),
+                            patient_reference=d_res.get("patient_reference"),
+                        )
+                else:
+                    final_reply = format_localized_message(
+                        lang,
+                        "booking_failed",
+                        error=last_booking_result.error or "Slot conflict",
+                    )
+
+        # Handle single-step tool call if returned by adapter (MockReasoningAdapter or direct action.tool_call)
+        if action.tool_call and not booking_attempted_in_turn:
             tool_name = action.tool_call.tool_name
 
             # STRICT CONFIRMATION GATE for booking
@@ -149,21 +379,23 @@ class ConversationManager:
                     session.confirmation_status != ConfirmationStatus.PENDING
                     and not is_affirmative(message)
                 ):
-                    final_reply = (
-                        "Explicit confirmation is required before booking. "
-                        "Please reply 'YES' to confirm or 'NO' to cancel."
-                    )
-                elif session.confirmed_draft_fingerprint != current_fingerprint:
+                    final_reply = format_localized_message(lang, "explicit_confirm_required")
+                elif session.confirmed_draft_fingerprint != current_fingerprint or initial_fingerprint != current_fingerprint:
                     # Stale or changed draft
                     session.confirmation_status = ConfirmationStatus.PENDING
                     session.confirmed_draft_fingerprint = current_fingerprint
-                    final_reply = (
-                        "Booking details have changed. Please confirm the updated details:\n"
-                        f"• Doctor: {session.draft.doctor_name}\n"
-                        f"• Slot: {session.draft.slot_start_time or session.draft.slot_id}\n"
-                        f"• Reason: {session.draft.reason_category}\n"
-                        f"• Patient Reference: {session.draft.patient_reference}\n\n"
-                        "Reply 'YES' to finalize booking."
+                    final_reply = with_urgent_guidance_if_needed(
+                        lang,
+                        format_localized_message(
+                            lang,
+                            "changed_reconfirm",
+                            doctor_name=session.draft.doctor_name,
+                            slot_display=format_slot_display(session.draft.slot_id, session.draft.slot_start_time),
+                            reason_category=session.draft.reason_category,
+                            patient_reference=session.draft.patient_reference,
+                        ),
+                        message,
+                        session.draft.reason_category,
                     )
                 else:
                     # All confirmation criteria satisfied -> Execute transactional booking
@@ -175,14 +407,14 @@ class ConversationManager:
                         session.step = ConversationStep.BOOKED
                         session.confirmation_status = ConfirmationStatus.CONFIRMED
                         session.booked_appointment = tool_res.data
-                        final_reply = (
-                            f"Appointment Confirmed! 🎉\n"
-                            f"• Appointment ID: {tool_res.data.get('appointment_id')}\n"
-                            f"• Doctor: {tool_res.data.get('doctor_name')}\n"
-                            f"• Schedule: {tool_res.data.get('appointment_start_time')}\n"
-                            f"• Status: {tool_res.data.get('appointment_status')}\n"
-                            f"• Patient Reference: {tool_res.data.get('patient_reference')}\n\n"
-                            f"Your booking has been permanently recorded in Aarogya One Hospital's database."
+                        final_reply = format_localized_message(
+                            lang,
+                            "booking_confirmed",
+                            appointment_id=tool_res.data.get("appointment_id"),
+                            doctor_name=tool_res.data.get("doctor_name"),
+                            appointment_start_time=tool_res.data.get("appointment_start_time"),
+                            appointment_status=tool_res.data.get("appointment_status"),
+                            patient_reference=tool_res.data.get("patient_reference"),
                         )
                     else:
                         # Slot unavailable, concurrent booking conflict, or validation error
@@ -191,10 +423,10 @@ class ConversationManager:
                         session.draft.slot_start_time = None
                         session.confirmation_status = ConfirmationStatus.NONE
                         session.confirmed_draft_fingerprint = None
-                        final_reply = (
-                            f"Booking could not be completed: {tool_res.error}\n"
-                            "The selected slot is unavailable or conflict occurred. "
-                            "Please choose a different available slot."
+                        final_reply = format_localized_message(
+                            lang,
+                            "booking_failed",
+                            error=tool_res.error,
                         )
 
             elif tool_name == "search_doctors":
@@ -202,10 +434,8 @@ class ConversationManager:
                 session.tool_trace.append(tool_res)
                 if tool_res.success and tool_res.data:
                     docs = tool_res.data
-                    search_arg = action.tool_call.arguments.get("specialty_or_department", "")
-
                     is_doctor_specific = (
-                        self.adapter._detect_doctor_query(message.lower()) is not None  # type: ignore
+                        self.adapter._detect_doctor_query(message) is not None
                     ) and len(docs) > 0
 
                     if is_doctor_specific and docs:
@@ -224,30 +454,37 @@ class ConversationManager:
 
                         if slot_res.success and slot_res.data:
                             slots = slot_res.data
-                            slot_lines = [f"• Slot ID: {s['slot_id']} | Start: {s['start_time']}" for s in slots[:5]]
-                            final_reply = (
-                                f"Selected {chosen_doc['display_name']} ({chosen_doc['specialty']}).\n"
-                                f"Available open slots:\n"
-                                + "\n".join(slot_lines)
-                                + f"\n\nPlease specify which slot ID you prefer (e.g., 'I want {slots[0]['slot_id']}')."
+                            slot_lines = "\n".join(
+                                [f"• Slot ID: {s['slot_id']} | Start: {s['start_time']}" for s in slots[:5]]
+                            )
+                            final_reply = format_localized_message(
+                                lang,
+                                "selected_doctor_slots",
+                                doctor_name=chosen_doc["display_name"],
+                                specialty=chosen_doc["specialty"],
+                                slot_lines=slot_lines,
+                                example_slot=slots[0]["slot_id"],
                             )
                         else:
-                            final_reply = (
-                                f"No available slots currently found for {chosen_doc['display_name']}. "
-                                "Would you like to check another doctor or date?"
+                            final_reply = format_localized_message(
+                                lang,
+                                "no_slots",
+                                doctor_name=chosen_doc["display_name"],
                             )
                         session.step = ConversationStep.COLLECTING_SLOT
                     else:
                         doc_list_str = "\n".join(
                             [f"• {d['display_name']} — {d['specialty']} ({d['department_name']})" for d in docs]
                         )
-                        final_reply = (
-                            f"I found {len(docs)} specialist(s) available at Aarogya One Hospital:\n{doc_list_str}\n\n"
-                            f"Which doctor would you like to schedule an appointment with?"
+                        final_reply = format_localized_message(
+                            lang,
+                            "found_doctors",
+                            count=len(docs),
+                            doc_list=doc_list_str,
                         )
                         session.step = ConversationStep.COLLECTING_DOCTOR
                 else:
-                    final_reply = "No matching doctors found for that query. Would you like to check general medicine or another department?"
+                    final_reply = format_localized_message(lang, "no_doctors")
 
             elif tool_name == "get_available_slots":
                 tool_res = self.tool_router.execute_tool(db, action.tool_call)
@@ -258,19 +495,22 @@ class ConversationManager:
                         session.draft.doctor_name = slots[0].get("doctor_name")
                         session.draft.specialty = slots[0].get("specialty")
 
-                    slot_lines = [f"• Slot ID: {s['slot_id']} | Start: {s['start_time']}" for s in slots[:5]]
-                    final_reply = (
-                        f"Available open slots for {session.draft.doctor_name or 'the doctor'}:\n"
-                        + "\n".join(slot_lines)
-                        + "\n\nPlease specify which slot ID you prefer (e.g., 'I want "
-                        + slots[0]["slot_id"]
-                        + "')."
+                    slot_lines = "\n".join(
+                        [f"• Slot ID: {s['slot_id']} | Start: {s['start_time']}" for s in slots[:5]]
+                    )
+                    final_reply = format_localized_message(
+                        lang,
+                        "available_slots",
+                        doctor_name=session.draft.doctor_name or "the doctor",
+                        slot_lines=slot_lines,
+                        example_slot=slots[0]["slot_id"],
                     )
                     session.step = ConversationStep.COLLECTING_SLOT
                 else:
-                    final_reply = (
-                        f"No available slots currently found for {session.draft.doctor_name or 'the selected doctor'}. "
-                        "Would you like to check another doctor or date?"
+                    final_reply = format_localized_message(
+                        lang,
+                        "no_slots",
+                        doctor_name=session.draft.doctor_name or "the selected doctor",
                     )
 
         # Update dialogue step based on completeness if not booked or cancelled
@@ -279,6 +519,27 @@ class ConversationManager:
                 session.step = ConversationStep.AWAITING_CONFIRMATION
                 session.confirmation_status = ConfirmationStatus.PENDING
                 session.confirmed_draft_fingerprint = session.draft.get_fingerprint()
+                # Ensure confirmation summary contains the current slot_id and patient_reference
+                if (
+                    session.draft.slot_id
+                    and session.draft.slot_id not in final_reply
+                    and (session.draft.slot_start_time or "") not in final_reply
+                ):
+                    final_reply = format_localized_message(
+                        lang,
+                        "confirm_summary",
+                        patient_reference=session.draft.patient_reference,
+                        doctor_name=session.draft.doctor_name or "Specialist",
+                        specialty=session.draft.specialty or "OPD",
+                        slot_display=format_slot_display(session.draft.slot_id, session.draft.slot_start_time),
+                        reason_category=session.draft.reason_category,
+                    )
+                final_reply = with_urgent_guidance_if_needed(
+                    lang,
+                    final_reply,
+                    message,
+                    session.draft.reason_category,
+                )
             elif not session.draft.doctor_id:
                 session.step = ConversationStep.COLLECTING_DOCTOR
             elif not session.draft.slot_id:
@@ -294,6 +555,7 @@ class ConversationManager:
         return ChatResponse(
             session_id=session.session_id,
             reply=reply,
+            language=session.language,
             step=session.step,
             draft=session.draft,
             missing_details=session.draft.missing_fields(),

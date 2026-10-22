@@ -55,6 +55,27 @@ def get_session_state(session_id: str):
     return conversation_manager._sessions[session_id]
 
 
+@router.get(
+    "/config",
+    summary="Inspect active reasoning adapter configuration and supported languages",
+)
+def get_agent_config():
+    """Returns safe metadata about the active reasoning provider, model, and supported languages."""
+    adapter = conversation_manager.adapter
+    is_gemini = adapter.__class__.__name__ == "GeminiReasoningAdapter"
+    return {
+        "provider": "gemini" if is_gemini else "mock",
+        "adapter_class": adapter.__class__.__name__,
+        "model": getattr(adapter, "model", "deterministic-mock"),
+        "last_model_used": getattr(adapter, "last_model_used", None),
+        "live_key_configured": bool(getattr(adapter, "api_key", "")),
+        "timeout_seconds": getattr(adapter, "timeout_seconds", None),
+        "max_tool_rounds": getattr(adapter, "max_tool_rounds", None),
+        "supported_languages": ["te", "ta", "kn", "hi", "en"],
+        "approved_tools": sorted(list(conversation_manager.tool_router.ALLOWED_TOOLS)),
+    }
+
+
 @router.post(
     "/sessions/{session_id}/reset",
     response_model=SessionResetResponse,
@@ -67,3 +88,4 @@ def reset_session(session_id: str):
         status="reset_successful",
         session_id=session_id,
     )
+

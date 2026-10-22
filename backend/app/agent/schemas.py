@@ -86,6 +86,7 @@ class AgentSessionState(BaseModel):
     session_id: str
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     last_active_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    language: str = "en"
     step: ConversationStep = ConversationStep.GREETING
     draft: BookingDraft = Field(default_factory=BookingDraft)
     confirmation_status: ConfirmationStatus = ConfirmationStatus.NONE
@@ -106,6 +107,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     session_id: str
     reply: str
+    language: str = "en"
     step: ConversationStep
     draft: BookingDraft
     missing_details: List[str]
@@ -117,3 +119,4 @@ class ChatResponse(BaseModel):
 class SessionResetResponse(BaseModel):
     status: str
     session_id: str
+

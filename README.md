@@ -2,9 +2,9 @@
 
 **Hospital:** Aarogya One Hospital (fictional multispecialty hospital in Bengaluru)  
 **Challenge:** Great Indian AI Internship Challenge  
-**Status:** Phase 1 backend foundation and Phase 2 text-first AI agent implemented. The reported backend test suite passes 37/37 tests.
+**Status:** Phase 1 backend foundation, Phase 2 text-first AI agent, and Real Gemini API Multilingual Integration (`te`, `ta`, `kn`, `hi`, `en`) implemented and verified. The backend test suite passes **54/54 tests**.
 
-MediVoice AI is a hospital operations assistant designed to streamline doctor discovery, appointment scheduling, lab order tracking, and operational workflows. It currently uses a deterministic mock reasoning adapter, allowing development and testing without external AI API credits.
+MediVoice AI is a hospital operations assistant designed to streamline doctor discovery, appointment scheduling, lab order tracking, and operational workflows. It supports both live Gemini API reasoning (`GeminiReasoningAdapter`) and deterministic offline reasoning (`MockReasoningAdapter`) for automated tests without consuming external API credits.
 
 ## Phase 1: Backend Foundation
 
@@ -20,42 +20,35 @@ MediVoice AI is a hospital operations assistant designed to streamline doctor di
 
 - Eight database models covering hospitals, departments, doctors, appointment slots, appointments, lab orders, workflow exceptions, and audit events.
 - Transactional appointment booking and database constraints to prevent double booking.
-- Doctor and appointment-slot discovery.
+- Doctor and appointment-slot discovery with multilingual alias resolution.
 - Appointment cancellation and completion.
 - Lab order status tracking.
 - Deterministic detection and management of overdue lab workflows.
 - Synthetic demo data for Aarogya One Hospital.
 
-## Phase 2: Text-First AI Agent
+## Phase 2+: Multilingual Gemini Agent (`te`, `ta`, `kn`, `hi`, `en`)
 
 ### Agent components
 
-- **Conversation manager:** Maintains multi-turn conversation state and prompts for missing appointment details.
-- **Reasoning adapter:** Provider-independent interface with a deterministic mock implementation.
-- **Restricted tool router:** Allows only approved doctor search, slot discovery, and appointment booking tools.
-- **Confirmation gate:** Requires explicit patient confirmation of the pending booking before executing the booking operation.
-- **Booking verification:** Uses the existing transactional service and reports success only after the booking operation succeeds.
+- **Conversation manager:** Maintains multi-turn conversation state, active patient language (`en`, `te`, `ta`, `kn`, `hi`), and prompts for missing appointment details.
+- **Reasoning adapters:**
+  - `GeminiReasoningAdapter`: Official Gemini API (`generateContent` with `functionDeclarations`) using `gemini-3.6-flash` (with automatic fallback to `gemini-3.8-flash` / `gemma-4-26b-a4b-it`), bounded request timeouts, bounded `max_tool_rounds`, and backend-only `GEMINI_API_KEY`.
+  - `MockReasoningAdapter`: Deterministic offline reasoning adapter supporting all five languages for zero-credit automated tests.
+- **Restricted tool router:** Allows only approved `search_doctors`, `get_available_slots`, and `book_appointment` tools. Blocks direct SQL or unapproved tools.
+- **Confirmation gate:** Requires explicit patient confirmation (`YES`, `అవును`, `ஆம்`, `ಹೌದು`, `हाँ`) of the pending booking draft before executing `book_appointment`. Any change to doctor, slot, reason, or patient reference invalidates prior confirmation via SHA-256 draft fingerprinting.
+- **Booking verification:** Uses the transactional service and reports success only after the database commit succeeds.
 - **Session isolation:** Keeps conversation drafts and patient references isolated between sessions.
 
 ### Agent API endpoints
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| POST | `/api/v1/agent/chat` | Send a message to the agent |
+| POST | `/api/v1/agent/chat` | Send a message to the agent (English, Telugu, Tamil, Kannada, Hindi) |
 | GET | `/api/v1/agent/sessions/{session_id}` | Inspect conversation state |
 | POST | `/api/v1/agent/sessions/{session_id}/reset` | Reset a conversation session |
+| GET | `/api/v1/agent/config` | Inspect active reasoning provider, model, and supported languages (never exposes API key) |
 
-The current session store is in memory. Sessions are lost on server restart and are not shared between multiple backend workers.
-
-## Technology Stack
-
-- Frontend: React, TypeScript, Vite
-- Backend: Python, FastAPI, Pydantic
-- Database: SQLAlchemy with SQLite/PostgreSQL support
-- Migrations: Alembic
-- Testing: Pytest
-
-## Setup on Windows PowerShell
+## Setup & Configuration
 
 ### 1. Install dependencies
 
@@ -64,22 +57,24 @@ py -m pip install -r backend/requirements.txt
 npm install
 ```
 
-### 2. Configure the local database
+### 2. Configure `.env`
 
-```powershell
-$env:PYTHONPATH="backend"
-$env:DATABASE_URL="sqlite:///aarogya_demo.db"
+Copy `.env.example` to `.env` and set your backend environment variables:
+
+```ini
+DATABASE_URL=sqlite:///./aarogya_demo.db
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-3.6-flash
+GEMINI_TIMEOUT_SECONDS=15.0
+GEMINI_MAX_TOOL_ROUNDS=4
 ```
 
-Use synthetic demo data only. Keep secrets in local environment files and never commit credentials.
-
-### 3. Run backend tests
+### 3. Run backend tests (uses `MockReasoningAdapter`, consumes zero API credits)
 
 ```powershell
-py -m pytest backend/tests/ -v
+$env:PYTHONPATH="backend"; py -m pytest backend/tests/ -v
 ```
-
-The latest reported test run completed with 37 passed tests and exit code 0. Re-run the suite to verify the current checkout.
 
 ### 4. Run frontend checks
 
@@ -88,11 +83,15 @@ npm run lint
 npm run build
 ```
 
-### 5. Start the backend
+### 5. Seed synthetic data and start the backend
 
 ```powershell
 $env:PYTHONPATH="backend"
-$env:DATABASE_URL="sqlite:///aarogya_demo.db"
+$env:DATABASE_URL="sqlite:///./aarogya_demo.db"
+$env:LLM_PROVIDER="gemini"
+$env:GEMINI_API_KEY="your_gemini_api_key_here"
+$env:GEMINI_MODEL="gemini-3.6-flash"
+py backend/scripts/seed_data.py
 py -m uvicorn app.main:app --app-dir backend --port 8000 --reload
 ```
 
@@ -104,15 +103,7 @@ Open another terminal at the project root:
 npm run dev
 ```
 
-Use the local URL printed by Vite. FastAPI's interactive API documentation is available at `http://localhost:8000/docs`.
-
-## Current Limitations and Future Work
-
-- The reasoning adapter is deterministic and does not yet provide genuine LLM reasoning.
-- Live Gnani AI/Evon integration and speech-to-text/text-to-speech are planned future enhancements.
-- The in-memory conversation store is suitable for an initial demo, not a multi-worker production deployment.
-- The project uses synthetic data and is not a production clinical decision-support system.
-
 ## Project Safety
 
-MediVoice AI is an educational prototype. It must not be used as a substitute for clinical judgment or as a production system for real patient data.
+MediVoice AI is an educational prototype using strictly synthetic data. It must not be used as a substitute for clinical judgment or with real patient data.
+
