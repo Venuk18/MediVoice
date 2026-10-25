@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from app.agent.schemas import ToolCallIntent, ToolExecutionResult
 from app.services.doctor_service import search_doctors_tool, get_available_slots_tool
 from app.services.appointment_service import book_appointment_tool
+from app.services.lab_service import check_lab_report_status_tool
+from app.services.insurance_service import search_hospital_insurance_tool
 
 
 class RestrictedToolRouter:
@@ -18,6 +20,8 @@ class RestrictedToolRouter:
         "search_doctors",
         "get_available_slots",
         "book_appointment",
+        "check_lab_report_status",
+        "search_hospital_insurance",
     }
 
     def execute_tool(self, db: Session, intent: ToolCallIntent) -> ToolExecutionResult:
@@ -47,6 +51,10 @@ class RestrictedToolRouter:
                 return self._execute_get_available_slots(db, args)
             elif tool_name == "book_appointment":
                 return self._execute_book_appointment(db, args)
+            elif tool_name == "check_lab_report_status":
+                return self._execute_check_lab_report_status(db, args)
+            elif tool_name == "search_hospital_insurance":
+                return self._execute_search_hospital_insurance(db, args)
             else:
                 return ToolExecutionResult(
                     tool_name=tool_name,
@@ -203,3 +211,96 @@ class RestrictedToolRouter:
             success=True,
             data=result,
         )
+
+    def _execute_check_lab_report_status(self, db: Session, args: Dict[str, Any]) -> ToolExecutionResult:
+        allowed_keys = {"verification_code", "session_key"}
+        disallowed = set(args.keys()) - allowed_keys
+        if disallowed:
+            return ToolExecutionResult(
+                tool_name="check_lab_report_status",
+                success=False,
+                error=f"Invalid arguments for check_lab_report_status: {sorted(list(disallowed))}",
+            )
+
+        code = args.get("verification_code")
+        if code is None or not isinstance(code, str) or not code.strip():
+            return ToolExecutionResult(
+                tool_name="check_lab_report_status",
+                success=False,
+                error="Missing required argument 'verification_code' (must be a 6-digit string).",
+            )
+
+        session_key = args.get("session_key")
+        if session_key is not None and not isinstance(session_key, str):
+            return ToolExecutionResult(
+                tool_name="check_lab_report_status",
+                success=False,
+                error="Argument 'session_key' must be a string.",
+            )
+
+        result = check_lab_report_status_tool(
+            db=db,
+            verification_code=code.strip(),
+            session_key=session_key,
+        )
+        return ToolExecutionResult(
+            tool_name="check_lab_report_status",
+            success=True,
+            data=result,
+        )
+
+    def _execute_search_hospital_insurance(self, db: Session, args: Dict[str, Any]) -> ToolExecutionResult:
+        allowed_keys = {"provider_name", "plan_type", "service", "cashless"}
+        disallowed = set(args.keys()) - allowed_keys
+        if disallowed:
+            return ToolExecutionResult(
+                tool_name="search_hospital_insurance",
+                success=False,
+                error=f"Invalid arguments for search_hospital_insurance: {sorted(list(disallowed))}",
+            )
+
+        provider_name = args.get("provider_name")
+        if provider_name is not None and not isinstance(provider_name, str):
+            return ToolExecutionResult(
+                tool_name="search_hospital_insurance",
+                success=False,
+                error="Argument 'provider_name' must be a string.",
+            )
+
+        plan_type = args.get("plan_type")
+        if plan_type is not None and not isinstance(plan_type, str):
+            return ToolExecutionResult(
+                tool_name="search_hospital_insurance",
+                success=False,
+                error="Argument 'plan_type' must be a string.",
+            )
+
+        service = args.get("service")
+        if service is not None and not isinstance(service, str):
+            return ToolExecutionResult(
+                tool_name="search_hospital_insurance",
+                success=False,
+                error="Argument 'service' must be a string.",
+            )
+
+        cashless = args.get("cashless")
+        if cashless is not None and not isinstance(cashless, bool):
+            return ToolExecutionResult(
+                tool_name="search_hospital_insurance",
+                success=False,
+                error="Argument 'cashless' must be a boolean.",
+            )
+
+        result = search_hospital_insurance_tool(
+            db=db,
+            provider_name=provider_name,
+            plan_type=plan_type,
+            service=service,
+            cashless=cashless,
+        )
+        return ToolExecutionResult(
+            tool_name="search_hospital_insurance",
+            success=True,
+            data=result,
+        )
+

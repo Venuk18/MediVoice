@@ -191,6 +191,58 @@ MULTILINGUAL_SEARCH_ALIASES: Dict[str, str] = {
     "सुनीता": "Rao",
 }
 
+TRANSLITERATED_SEARCH_ALIASES: Dict[str, str] = {
+    "cardiologist": "Cardiology",
+    "cardiac": "Cardiology",
+    "heart": "Cardiology",
+    "gunde": "Cardiology",
+    "chaathi": "Cardiology",
+    "chathi": "Cardiology",
+    "ithaya": "Cardiology",
+    "nenju": "Cardiology",
+    "hrudaya": "Cardiology",
+    "ede novu": "Cardiology",
+    "seene": "Cardiology",
+    "dil": "Cardiology",
+    "neurologist": "Neurology",
+    "brain": "Neurology",
+    "migraine": "Neurology",
+    "thala noppi": "Neurology",
+    "talanoppi": "Neurology",
+    "thalai vali": "Neurology",
+    "thalaivali": "Neurology",
+    "thale novu": "Neurology",
+    "talenovu": "Neurology",
+    "sar dard": "Neurology",
+    "sirdard": "Neurology",
+    "orthopedic": "Orthopedics",
+    "ortho": "Orthopedics",
+    "bone": "Orthopedics",
+    "joint": "Orthopedics",
+    "knee": "Orthopedics",
+    "keella": "Orthopedics",
+    "mokalla": "Orthopedics",
+    "moottu": "Orthopedics",
+    "muzhangal": "Orthopedics",
+    "mandi novu": "Orthopedics",
+    "moole": "Orthopedics",
+    "haddi": "Orthopedics",
+    "ghutne": "Orthopedics",
+    "pediatrician": "Pediatrics",
+    "child": "Pediatrics",
+    "pillala": "Pediatrics",
+    "kuzhandhai": "Pediatrics",
+    "makkala": "Pediatrics",
+    "bachon": "Pediatrics",
+    "general physician": "General Medicine",
+    "physician": "General Medicine",
+    "jwaram": "General Medicine",
+    "kaichal": "General Medicine",
+    "jwara": "General Medicine",
+    "bukhar": "General Medicine",
+    "fever": "General Medicine",
+}
+
 
 def normalize_search_term(raw_term: Optional[str]) -> Optional[str]:
     if not raw_term:
@@ -198,9 +250,26 @@ def normalize_search_term(raw_term: Optional[str]) -> Optional[str]:
     cleaned = raw_term.strip()
     if not cleaned:
         return None
+    low_cleaned = cleaned.lower()
+    if low_cleaned in ("all", "any", "*"):
+        return None
+    # If fever/general medicine symptoms are combined with secondary headache symptoms, prefer General Medicine
+    has_general_med_cue = any(
+        cue in cleaned or cue in low_cleaned
+        for cue in ("జ్వరం", "காய்ச்சல்", "ಜ್ವರ", "बुखार", "fever", "jwaram", "kaichal", "jwara", "bukhar")
+    )
+    has_explicit_neuro = any(
+        cue in cleaned or cue in low_cleaned
+        for cue in ("న్యూరాలజీ", "న్యూరాలజిస్ట్", "நரம்பியல்", "ನ್ಯೂರಾಲಜಿ", "न्यूरोलॉजी", "न्यूरोलॉजिस्ट", "neurology", "neurologist")
+    )
+    if has_general_med_cue and not has_explicit_neuro:
+        return "General Medicine"
     for alias, canonical in MULTILINGUAL_SEARCH_ALIASES.items():
         if alias in cleaned:
             return canonical
+    for alias_en, canonical_en in TRANSLITERATED_SEARCH_ALIASES.items():
+        if alias_en in low_cleaned:
+            return canonical_en
     # Strip honorific prefixes like "Dr." or "Dr "
     stripped = cleaned
     for prefix in ("Dr.", "Dr ", "dr.", "dr ", "Doctor ", "doctor "):

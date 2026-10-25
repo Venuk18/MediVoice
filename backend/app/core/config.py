@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     GEMINI_TIMEOUT_SECONDS: float = float(os.getenv("GEMINI_TIMEOUT_SECONDS", "15.0"))
     GEMINI_MAX_TOOL_ROUNDS: int = int(os.getenv("GEMINI_MAX_TOOL_ROUNDS", "4"))
 
+    # Lab Verification Code & Rate Limiting Configuration
+    LAB_VERIFICATION_CODE_EXPIRY_HOURS: int = int(os.getenv("LAB_VERIFICATION_CODE_EXPIRY_HOURS", "72"))
+    LAB_VERIFICATION_MAX_GENERATION_RETRIES: int = int(os.getenv("LAB_VERIFICATION_MAX_GENERATION_RETRIES", "20"))
+    LAB_VERIFICATION_RATE_LIMIT_MAX_ATTEMPTS: int = int(os.getenv("LAB_VERIFICATION_RATE_LIMIT_MAX_ATTEMPTS", "5"))
+    LAB_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("LAB_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS", "300"))
+
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:3000",

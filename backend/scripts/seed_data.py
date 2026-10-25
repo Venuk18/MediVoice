@@ -29,6 +29,7 @@ from app.models.doctor import Doctor
 from app.models.appointment_slot import AppointmentSlot
 from app.models.appointment import Appointment
 from app.models.lab_order import LabOrder
+from app.models.insurance import InsuranceProvider, InsurancePlan
 from app.models.workflow_exception import WorkflowException
 from app.models.audit_event import AuditEvent
 
@@ -183,12 +184,6 @@ def seed_database(db: Session, reset: bool = False):
     print(f"  [+] Configured future appointment slots ({slot_count} new slots generated)")
 
     # 5. Synthetic Appointments in different statuses
-    # Let's create:
-    # 1 CONFIRMED appointment for Dr. Rajesh Sharma
-    # 1 COMPLETED appointment with follow-up recorded for Dr. Priya Nair
-    # 1 CANCELLED appointment for Dr. Arvind Swamy
-    
-    # Slot 1: Dr. Rajesh Sharma (Day 2 at 10:00 -> slot-103) -> CONFIRMED so slot-101 and slot-102 remain AVAILABLE
     dr_sharma_id = doctor_defs[0]["id"]
     day2_sharma_10am_key = f"{dr_sharma_id}_{(now_utc + timedelta(days=2)).replace(hour=10).strftime('%Y%m%d%H%M')}"
     slot1 = slot_map.get(day2_sharma_10am_key)
@@ -239,7 +234,6 @@ def seed_database(db: Session, reset: bool = False):
     appt3_id = "44444444-0003-0000-0000-000000000003"
     existing_appt3 = db.scalars(select(Appointment).where(Appointment.id == appt3_id)).first()
     if not existing_appt3 and slot3:
-        # Note: In our model, a cancelled appointment releases its slot back to AVAILABLE
         slot3.status = "AVAILABLE"
         existing_appt3 = Appointment(
             id=appt3_id,
@@ -253,38 +247,78 @@ def seed_database(db: Session, reset: bool = False):
         db.add(existing_appt3)
         print("  [+] Added Synthetic Appointment: CANCELLED (PAT-2024-5501 with Dr. Arvind Swamy)")
 
-    # 6. Synthetic Lab Orders (including an OVERDUE Processing order)
+    # 6. Synthetic Lab Orders with 6-digit verification codes (including leading-zero code "048271")
     lab_orders_defs = [
         {
             "id": "55555555-0001-0000-0000-000000000001",
             "patient_reference": "PAT-2024-9182",
             "dept_id": dept_map["Cardiology"].id,
+            "test_name": "Cardiac Troponin I & Lipid Profile",
             "test_category": "Cardiac Troponin I & Lipid Profile",
             "workflow_status": "Processing",
             # Intentionally overdue by 3 hours to verify Workflow Intelligence detection!
             "expected_completion_at": now_utc - timedelta(hours=3),
             "assigned_team": "Stat Biochemistry Core",
             "delay_reason": "Analyzer reagent recalibration in progress",
+            "verification_code": "048271",
+            "verification_code_expires_at": now_utc + timedelta(hours=72),
+            "verification_code_is_active": True,
         },
         {
             "id": "55555555-0002-0000-0000-000000000002",
             "patient_reference": "PAT-2024-3310",
             "dept_id": dept_map["Neurology"].id,
+            "test_name": "Serum Electrolytes & Vitamin B12",
             "test_category": "Serum Electrolytes & Vitamin B12",
             "workflow_status": "Completed",
             "expected_completion_at": now_utc - timedelta(hours=6),
             "assigned_team": "General Chemistry",
             "delay_reason": None,
+            "verification_code": "384920",
+            "verification_code_expires_at": now_utc + timedelta(hours=72),
+            "verification_code_is_active": True,
         },
         {
             "id": "55555555-0003-0000-0000-000000000003",
             "patient_reference": "PAT-2024-7744",
             "dept_id": dept_map["General Medicine"].id,
+            "test_name": "Glycated Hemoglobin (HbA1c)",
             "test_category": "Glycated Hemoglobin (HbA1c)",
-            "workflow_status": "Pending",
+            "workflow_status": "REGISTERED",
             "expected_completion_at": now_utc + timedelta(hours=4),
             "assigned_team": "Routine Hematology",
             "delay_reason": None,
+            "verification_code": "729104",
+            "verification_code_expires_at": now_utc + timedelta(hours=72),
+            "verification_code_is_active": True,
+        },
+        {
+            "id": "55555555-0004-0000-0000-000000000004",
+            "patient_reference": "PAT-2026-4409",
+            "dept_id": dept_map["General Medicine"].id,
+            "test_name": "Complete Blood Count (CBC) & ESR",
+            "test_category": "Complete Blood Count (CBC) & ESR",
+            "workflow_status": "SAMPLE_COLLECTED",
+            "expected_completion_at": now_utc + timedelta(hours=5),
+            "assigned_team": "Hematology Core",
+            "delay_reason": None,
+            "verification_code": "019482",
+            "verification_code_expires_at": now_utc + timedelta(hours=72),
+            "verification_code_is_active": True,
+        },
+        {
+            "id": "55555555-0005-0000-0000-000000000005",
+            "patient_reference": "PAT-2024-5501",
+            "dept_id": dept_map["Orthopedics"].id,
+            "test_name": "Synovial Fluid Culture & Sensitivity",
+            "test_category": "Synovial Fluid Culture & Sensitivity",
+            "workflow_status": "CANCELLED",
+            "expected_completion_at": now_utc - timedelta(hours=12),
+            "assigned_team": "Microbiology Lab",
+            "delay_reason": "Order cancelled prior to sample collection",
+            "verification_code": "905318",
+            "verification_code_expires_at": now_utc + timedelta(hours=72),
+            "verification_code_is_active": True,
         },
     ]
 
@@ -295,16 +329,189 @@ def seed_database(db: Session, reset: bool = False):
                 id=l_def["id"],
                 patient_reference=l_def["patient_reference"],
                 ordering_department_id=l_def["dept_id"],
+                test_name=l_def["test_name"],
                 test_category=l_def["test_category"],
                 workflow_status=l_def["workflow_status"],
                 expected_completion_at=l_def["expected_completion_at"],
                 assigned_team=l_def["assigned_team"],
                 delay_reason=l_def["delay_reason"],
+                verification_code=l_def["verification_code"],
+                verification_code_expires_at=l_def["verification_code_expires_at"],
+                verification_code_is_active=l_def["verification_code_is_active"],
             )
             db.add(existing_lab)
             print(f"  [+] Added Lab Order: {l_def['test_category']} (Status: {l_def['workflow_status']})")
+        else:
+            # Ensure verification fields are populated on existing records idempotently
+            if not existing_lab.verification_code:
+                existing_lab.verification_code = l_def["verification_code"]
+                existing_lab.verification_code_expires_at = l_def["verification_code_expires_at"]
+                existing_lab.verification_code_is_active = l_def["verification_code_is_active"]
+            if not existing_lab.test_name:
+                existing_lab.test_name = l_def["test_name"]
 
-    # 7. Workflow Exception & Audit Events
+    # 7. Synthetic Hospital Insurance Providers & Plans
+    insurance_provider_defs = [
+        {
+            "id": "88888888-0001-0000-0000-000000000001",
+            "name": "Aarogya Shield Health Insurance",
+            "code": "ASHI-01",
+            "support_Contact": "1800-100-4201 (Desk Ext. 402)",
+            "is_active": True,
+            "plans": [
+                {
+                    "id": "99999999-0001-0000-0000-000000000001",
+                    "plan_name": "Aarogya Shield Gold Cashless Plus",
+                    "plan_type": "Individual & Family Floater",
+                    "coverage_summary": "Comprehensive inpatient hospitalization, ICU, day-care surgeries, and pre/post-hospitalization diagnostics.",
+                    "covered_services": "Inpatient Hospitalization, ICU, Cardiology Procedures, Neurology Care, Orthopedic Surgery, Emergency Stabilization, Pre/Post Hospitalization Diagnostics",
+                    "copay_Summary": "0% co-pay for network tertiary care in standard private room; 10% co-pay for luxury suite upgrades.",
+                    "preauthorization_Required": True,
+                    "cashless_Available": True,
+                    "reimbursement_Available": True,
+                    "network_Notes": "24/7 cashless pre-authorization available at Aarogya One Insurance Desk (Ground Floor, Block A).",
+                    "is_active": True,
+                },
+                {
+                    "id": "99999999-0002-0000-0000-000000000002",
+                    "plan_name": "Aarogya Shield OPD & Diagnostics Care",
+                    "plan_type": "OPD & Preventive Rider",
+                    "coverage_summary": "Covers specialist outpatient consultations, prescribed laboratory tests, and radiology up to annual rider limit.",
+                    "covered_services": "OPD Consultations, Pathology & Lab Tests, X-Ray, ECG, Ultrasound, Preventive Health Checkup",
+                    "copay_Summary": "15% co-pay on outpatient consultations and diagnostic laboratory orders.",
+                    "preauthorization_Required": False,
+                    "cashless_Available": True,
+                    "reimbursement_Available": True,
+                    "network_Notes": "Present digital policy card at OPD Billing Counter 3 for direct outpatient billing.",
+                    "is_active": True,
+                },
+            ],
+        },
+        {
+            "id": "88888888-0002-0000-0000-000000000002",
+            "name": "Bharat Care Assurance",
+            "code": "BCA-02",
+            "support_Contact": "1800-200-8810 (Desk Ext. 403)",
+            "is_active": True,
+            "plans": [
+                {
+                    "id": "99999999-0003-0000-0000-000000000003",
+                    "plan_name": "Bharat Care Family Floater Prime",
+                    "plan_type": "Family Floater",
+                    "coverage_summary": "Covers inpatient medical and surgical admissions, maternity care, and pediatric hospitalization.",
+                    "covered_services": "Inpatient Hospitalization, Pediatrics, Maternity & Neonatal Care, General Medicine, Orthopedic Trauma, Day-Care Procedures",
+                    "copay_Summary": "10% mandatory co-pay across all inpatient claims; 20% co-pay for age 60+.",
+                    "preauthorization_Required": True,
+                    "cashless_Available": True,
+                    "reimbursement_Available": True,
+                    "network_Notes": "Planned surgeries require pre-authorization submission at least 48 hours prior to admission.",
+                    "is_active": True,
+                },
+                {
+                    "id": "99999999-0004-0000-0000-000000000004",
+                    "plan_name": "Bharat Care Basic Reimbursement Saver",
+                    "plan_type": "Individual Indemnity",
+                    "coverage_summary": "Standard inpatient hospitalization coverage on a reimbursement basis with itemized discharge summary.",
+                    "covered_services": "Inpatient Hospitalization, General Medicine, Emergency Care, Basic Surgical Procedures",
+                    "copay_Summary": "20% co-pay on admissible inpatient bill amount.",
+                    "preauthorization_Required": False,
+                    "cashless_Available": False,
+                    "reimbursement_Available": True,
+                    "network_Notes": "Cashless facility is not enabled on Basic Saver tier; hospital provides certified claim documents for reimbursement.",
+                    "is_active": True,
+                },
+            ],
+        },
+        {
+            "id": "88888888-0003-0000-0000-000000000003",
+            "name": "Deccan Star Mediclaim",
+            "code": "DSM-03",
+            "support_Contact": "1800-300-5599 (Desk Ext. 404)",
+            "is_active": True,
+            "plans": [
+                {
+                    "id": "99999999-0005-0000-0000-000000000005",
+                    "plan_name": "Deccan Star Senior Citizen Shield",
+                    "plan_type": "Senior Citizen Care",
+                    "coverage_summary": "Dedicated coverage for senior citizens including cardiac care, stroke rehabilitation, and joint replacement.",
+                    "covered_services": "Cardiology, Neurology & Stroke Care, Knee & Hip Joint Replacement, Dialysis, Cataract, Inpatient Nursing",
+                    "copay_Summary": "15% co-pay in twin-sharing room; 25% co-pay in single AC room.",
+                    "preauthorization_Required": True,
+                    "cashless_Available": True,
+                    "reimbursement_Available": True,
+                    "network_Notes": "Pre-existing disease waiting period rules apply per policy schedule; verify at TPA Desk.",
+                    "is_active": True,
+                },
+            ],
+        },
+        {
+            "id": "88888888-0004-0000-0000-000000000004",
+            "name": "Kaveri National Health TPA",
+            "code": "KNHT-04",
+            "support_Contact": "1800-400-7722 (Desk Ext. 405)",
+            "is_active": True,
+            "plans": [
+                {
+                    "id": "99999999-0006-0000-0000-000000000006",
+                    "plan_name": "Kaveri Corporate Group Cashless Premier",
+                    "plan_type": "Corporate Group Health",
+                    "coverage_summary": "Zero-deductible corporate group coverage for inpatient admissions, emergency trauma, and diagnostic panels.",
+                    "covered_services": "Inpatient Hospitalization, Cardiology, Neurology, Orthopedics, Pediatrics, General Medicine, Emergency & ICU, Diagnostics",
+                    "copay_Summary": "0% co-pay for employees; 10% co-pay for dependent parents.",
+                    "preauthorization_Required": True,
+                    "cashless_Available": True,
+                    "reimbursement_Available": True,
+                    "network_Notes": "Requires corporate employee ID and TPA e-card at Aarogya One Corporate Helpdesk.",
+                    "is_active": True,
+                },
+            ],
+        },
+        {
+            "id": "88888888-0005-0000-0000-000000000005",
+            "name": "Legacy Metro Assurance (Discontinued)",
+            "code": "LMA-99",
+            "support_Contact": "N/A",
+            "is_active": False,
+            "plans": [],
+        },
+    ]
+
+    for p_def in insurance_provider_defs:
+        existing_prov = db.scalars(select(InsuranceProvider).where(InsuranceProvider.id == p_def["id"])).first()
+        if not existing_prov:
+            existing_prov = InsuranceProvider(
+                id=p_def["id"],
+                hospital_id=hosp_id,
+                name=p_def["name"],
+                code=p_def["code"],
+                support_contact=p_def["support_Contact"],
+                is_active=p_def["is_active"],
+            )
+            db.add(existing_prov)
+            db.flush()
+            print(f"  [+] Added Insurance Provider: {p_def['name']} (Active: {p_def['is_active']})")
+
+        for plan_def in p_def["plans"]:
+            existing_plan = db.scalars(select(InsurancePlan).where(InsurancePlan.id == plan_def["id"])).first()
+            if not existing_plan:
+                existing_plan = InsurancePlan(
+                    id=plan_def["id"],
+                    provider_id=p_def["id"],
+                    plan_name=plan_def["plan_name"],
+                    plan_type=plan_def["plan_type"],
+                    coverage_summary=plan_def["coverage_summary"],
+                    covered_services=plan_def["covered_services"],
+                    copay_summary=plan_def["copay_Summary"],
+                    preauthorization_required=plan_def["preauthorization_Required"],
+                    cashless_available=plan_def["cashless_Available"],
+                    reimbursement_available=plan_def["reimbursement_Available"],
+                    network_notes=plan_def["network_Notes"],
+                    is_active=plan_def["is_active"],
+                )
+                db.add(existing_plan)
+                print(f"      [+] Added Insurance Plan: {plan_def['plan_name']}")
+
+    # 8. Workflow Exception & Audit Events
     exc_id = "66666666-0001-0000-0000-000000000001"
     existing_exc = db.scalars(select(WorkflowException).where(WorkflowException.id == exc_id)).first()
     if not existing_exc:
@@ -349,3 +556,4 @@ if __name__ == "__main__":
         seed_database(db, reset=reset_flag)
     finally:
         db.close()
+

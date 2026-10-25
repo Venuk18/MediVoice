@@ -1658,3 +1658,1252 @@ def test_regression_gemini_adapter_numeric_slot_invalid_slot_and_natural_reason(
     assert "108" in res_reason.reply or "emergency" in res_reason.reply.lower()
 
 
+# ==============================================================================
+# Step 1: Natural Multilingual Conversation Test Suite
+# ==============================================================================
+
+
+def test_greetings_and_general_appointment_questions_in_all_5_languages(client, seeded_hospital_data):
+    """
+    Verifies natural responses to standalone greetings, general 'how to book' intent,
+    department inquiries, and hospital timing questions across English, Telugu, Tamil,
+    Kannada, and Hindi without corrupting session state.
+    """
+    greetings_by_lang = [
+        ("en", "Hello", "Aarogya One Hospital"),
+        ("te", "నమస్కారం", "ఆరోగ్య వన్"),
+        ("ta", "வணக்கம்", "ஆரோக்கியா ஒன்"),
+        ("kn", "ನಮಸ್ಕಾರ", "ಆರೋಗ್ಯ ಒನ್"),
+        ("hi", "नमस्ते", "आरोग्य वन"),
+    ]
+    for expected_lang, msg, expected_phrase in greetings_by_lang:
+        resp = client.post(
+            "/api/v1/agent/chat",
+            json={"session_id": f"greet-{expected_lang}", "message": msg},
+        )
+        assert resp.status_code == 200
+        d = resp.json()
+        assert d["language"] == expected_lang
+        assert expected_phrase in d["reply"]
+        assert d["draft"]["doctor_id"] is None
+
+    # General department and timing inquiries
+    r_dept = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": "general-q-en", "message": "What departments are available at the hospital?"},
+    )
+    assert r_dept.status_code == 200
+    assert "Cardiology" in r_dept.json()["reply"]
+    assert "Neurology" in r_dept.json()["reply"]
+
+    r_hours_te = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": "general-q-te", "message": "హాస్పిటల్ సమయాలు ఏమిటి?"},
+    )
+    assert r_hours_te.status_code == 200
+    assert r_hours_te.json()["language"] == "te"
+    assert "08:00" in r_hours_te.json()["reply"]
+
+    r_how_hi = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": "general-q-hi", "message": "मुझे अपॉइंटमेंट बुक करना है, कैसे करूँ?"},
+    )
+    assert r_how_hi.status_code == 200
+    assert r_how_hi.json()["language"] == "hi"
+    assert "आरोग्य वन" in r_how_hi.json()["reply"]
+
+
+def test_general_question_mid_conversation_does_not_overwrite_visit_reason(client, seeded_hospital_data):
+    """
+    When the assistant asks for the clinical visit reason (after doctor and slot selection)
+    and the patient asks a general question like 'What are the hospital timings?' or says 'Hello',
+    the assistant answers the question and re-prompts for the reason instead of saving the question as the reason.
+    """
+    session_id = "mid-flow-question-safety"
+    client.post("/api/v1/agent/chat", json={"session_id": session_id, "message": "Dr. Rajesh Sharma"})
+    client.post("/api/v1/agent/chat", json={"session_id": session_id, "message": "slot-sharma-avail-1"})
+
+    # Ask hospital timings when reason is expected
+    r_q = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "What are the hospital timings?"},
+    )
+    d_q = r_q.json()
+    assert d_q["draft"]["reason_category"] is None
+    assert "reason" in d_q["missing_details"]
+    assert "08:00" in d_q["reply"]
+
+    # Now provide actual reason
+    r_reason = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "Routine cardiac checkup"},
+    )
+    assert r_reason.json()["draft"]["reason_category"] == "Routine cardiac checkup"
+
+
+def test_transliterated_and_mixed_language_conversations_across_indic_languages(
+    client, db_session, seeded_hospital_data
+):
+    """
+    Verifies that Romanized/transliterated phrases (Tenglish, Tanglish, Kanglish, Hinglish)
+    and mixed-language inputs accurately detect language, resolve specialties via search_doctors,
+    and maintain context.
+    """
+    from app.models.department import Department
+    from app.models.doctor import Doctor
+
+    hosp = seeded_hospital_data["hospital"]
+    ortho_dept = Department(
+        id="dept-ortho-translit", hospital_id=hosp.id, name="Orthopedics", description="Bone & Joint", is_active=True
+    )
+    gen_dept = Department(
+        id="dept-gen-translit", hospital_id=hosp.id, name="General Medicine", description="Internal Med", is_active=True
+    )
+    db_session.add_all([ortho_dept, gen_dept])
+    db_session.flush()
+    db_session.add_all(
+        [
+            Doctor(
+                id="doc-mehta-translit",
+                hospital_id=hosp.id,
+                department_id=ortho_dept.id,
+                display_name="Dr. Vikram Mehta",
+                specialty="Orthopedics",
+                is_active=True,
+            ),
+            Doctor(
+                id="doc-rao-translit",
+                hospital_id=hosp.id,
+                department_id=gen_dept.id,
+                display_name="Dr. Sunita Rao",
+                specialty="General Medicine",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    cases = [
+        ("te", "Namaskaram, naaku gunde noppi undi, cardiologist kavali", "Cardiology", "Dr. Rajesh Sharma"),
+        ("ta", "Vanakkam, enakku thalaivali, neurologist vendum", "Neurology", "Dr. Priya Nair"),
+        ("kn", "Namaskara, nanage mandi novu ide, orthopedics vaidyaru beku", "Orthopedics", "Dr. Vikram Mehta"),
+        ("hi", "Namaste, mujhe bukhar hai, general medicine doctor chahiye", "General Medicine", "Dr. Sunita Rao"),
+    ]
+    for expected_lang, message, expected_specialty, expected_doc in cases:
+        resp = client.post(
+            "/api/v1/agent/chat",
+            json={"session_id": f"translit-{expected_lang}", "message": message},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["language"] == expected_lang
+        assert data["draft"]["specialty"] == expected_specialty
+        assert expected_doc in data["reply"]
+        assert any(t["tool_name"] == "search_doctors" and t["success"] for t in data["tool_trace"])
+
+
+def test_contextual_follow_up_ordinal_doctor_and_slot_selection(client, db_session, seeded_hospital_data):
+    """
+    Verifies follow-up selections that depend on earlier context:
+    - 'first doctor' / 'మొదటి డాక్టర్' selects the first listed doctor from search_doctors trace.
+    - 'second slot' / 'రెండవ స్లాట్' selects the second offered slot from get_available_slots trace.
+    """
+    session_id = "contextual-ordinal-flow"
+
+    # Turn 1: Search Cardiology in Telugu -> returns Dr. Rajesh Sharma
+    r1 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "కార్డియాలజీ డాక్టర్లు ఎవరు ఉన్నారు?"},
+    )
+    assert r1.status_code == 200
+    assert r1.json()["step"] == "COLLECTING_DOCTOR"
+    assert "Dr. Rajesh Sharma" in r1.json()["reply"]
+
+    # Turn 2: Select 'మొదటి డాక్టర్' (first doctor) -> selects Dr. Rajesh Sharma and fetches his slots
+    r2 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "మొదటి డాక్టర్"},
+    )
+    d2 = r2.json()
+    assert d2["draft"]["doctor_name"] == "Dr. Rajesh Sharma"
+    assert d2["step"] == "COLLECTING_SLOT"
+    assert "slot-sharma-avail-1" in d2["reply"]
+    assert "slot-sharma-avail-2" in d2["reply"]
+
+    # Turn 3: Select 'రెండవ స్లాట్' (second slot) -> selects slot-sharma-avail-2
+    r3 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "రెండవ స్లాట్"},
+    )
+    d3 = r3.json()
+    assert d3["draft"]["slot_id"] == "slot-sharma-avail-2"
+    assert d3["step"] == "COLLECTING_DETAILS"
+
+
+def test_corrections_switching_doctor_reason_and_slot_mid_conversation(
+    client, db_session, seeded_hospital_data
+):
+    """
+    Verifies that patients can change their mind mid-conversation:
+    - Saying 'No, I want Dr. Priya Nair instead' switches doctor (clearing old slot) rather than cancelling.
+    - Saying 'change reason to migraine' updates reason_category and invalidates prior confirmation.
+    """
+    session_id = "test-mid-flow-corrections"
+
+    # Start with Dr. Sharma and slot-sharma-avail-1
+    client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "Dr. Rajesh Sharma", "patient_reference": "PAT-2026-3030"},
+    )
+    client.post("/api/v1/agent/chat", json={"session_id": session_id, "message": "slot-sharma-avail-1"})
+    r_conf1 = client.post("/api/v1/agent/chat", json={"session_id": session_id, "message": "Routine checkup"})
+    assert r_conf1.json()["step"] == "AWAITING_CONFIRMATION"
+    assert r_conf1.json()["draft"]["doctor_name"] == "Dr. Rajesh Sharma"
+
+    # Patient corrects doctor: "No, I want Dr. Priya Nair instead"
+    r_switch_doc = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "No, I want Dr. Priya Nair instead"},
+    )
+    d_switch = r_switch_doc.json()
+    assert d_switch["step"] == "COLLECTING_SLOT"
+    assert d_switch["draft"]["doctor_name"] == "Dr. Priya Nair"
+    assert d_switch["draft"]["slot_id"] is None
+    assert "slot-nair-avail-1" in d_switch["reply"]
+
+    # Select first slot for Dr. Priya Nair
+    r_slot = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "first slot"},
+    )
+    d_slot = r_slot.json()
+    assert d_slot["draft"]["slot_id"] == "slot-nair-avail-1"
+    assert d_slot["step"] == "AWAITING_CONFIRMATION"
+
+    # Correct the visit reason during AWAITING_CONFIRMATION
+    r_reason_chg = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "change reason to Heart palpitations follow-up"},
+    )
+    d_rchg = r_reason_chg.json()
+    assert d_rchg["draft"]["reason_category"] == "Heart palpitations follow-up"
+    assert d_rchg["step"] == "AWAITING_CONFIRMATION"
+    assert d_rchg["confirmation_status"] == "PENDING"
+    assert d_rchg["booked_appointment"] is None
+
+
+def test_ambiguous_replies_and_cancellation_recovery(client, db_session, seeded_hospital_data):
+    """
+    Verifies:
+    - Ambiguous replies ('maybe', 'not sure', 'ఏమో', 'पता नहीं') at confirmation do NOT commit a booking.
+    - After cancelling a booking, sending a new doctor/specialty request cleanly starts a new draft in the same session.
+    """
+    session_id = "test-ambiguous-and-cancel-recovery"
+
+    client.post(
+        "/api/v1/agent/chat",
+        json={
+            "session_id": session_id,
+            "message": "Book Dr. Sharma for routine checkup",
+            "patient_reference": "PAT-2026-4141",
+        },
+    )
+    r_ready = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "slot-sharma-avail-1"},
+    )
+    assert r_ready.json()["step"] == "AWAITING_CONFIRMATION"
+
+    # Send ambiguous reply
+    r_ambig = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "I am not sure, let me think"},
+    )
+    d_ambig = r_ambig.json()
+    assert d_ambig["step"] == "AWAITING_CONFIRMATION"
+    assert d_ambig["booked_appointment"] is None
+    assert "not booked yet" in d_ambig["reply"].lower()
+
+    # Cancel booking
+    r_cancel = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "Cancel the booking"},
+    )
+    assert r_cancel.json()["step"] == "CANCELLED"
+
+    # Resume in same session with a new doctor request
+    r_resume = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "Actually, I want to book with Dr. Priya Nair"},
+    )
+    d_resume = r_resume.json()
+    assert d_resume["step"] == "COLLECTING_SLOT"
+    assert d_resume["draft"]["doctor_name"] == "Dr. Priya Nair"
+    assert "slot-nair-avail-1" in d_resume["reply"]
+
+
+def test_concise_slot_reminder_avoids_redundant_slot_list_repetition(client, seeded_hospital_data):
+    """
+    When slots have already been fetched and displayed for a selected doctor, and the patient
+    provides their Patient Reference ID or visit reason before choosing a slot, the assistant
+    acknowledges the detail and concisely asks for a slot ID without re-invoking get_available_slots.
+    """
+    session_id = "test-no-redundant-slot-dump"
+
+    r1 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "I want to see Dr. Rajesh Sharma"},
+    )
+    assert r1.json()["step"] == "COLLECTING_SLOT"
+    slot_calls_after_t1 = sum(1 for t in r1.json()["tool_trace"] if t["tool_name"] == "get_available_slots")
+    assert slot_calls_after_t1 == 1
+
+    # Patient provides patient reference before picking a slot
+    r2 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "My patient ID is PAT-2026-9900"},
+    )
+    d2 = r2.json()
+    assert d2["draft"]["patient_reference"] == "PAT-2026-9900"
+    assert d2["step"] == "COLLECTING_SLOT"
+    slot_calls_after_t2 = sum(1 for t in d2["tool_trace"] if t["tool_name"] == "get_available_slots")
+    # Did not re-run get_available_slots unnecessarily
+    assert slot_calls_after_t2 == 1
+    assert "slot-sharma-avail-1" in d2["reply"]
+
+
+def test_urgent_symptoms_across_languages_provide_emergency_guidance(client, seeded_hospital_data):
+    """
+    Urgent symptoms (chest pain, severe shortness of breath, stroke/paralysis) in any supported
+    language immediately include emergency guidance (108 / 112) without diagnosing the patient.
+    """
+    urgent_inputs = [
+        ("en", "I have severe shortness of breath and chest tightness"),
+        ("te", "నాకు ఊపిరి ఆడటం లేదు మరియు ఛాతీ నొప్పిగా ఉంది"),
+        ("ta", "எனக்கு கடுமையான நெஞ்சு வலி மற்றும் மூச்சுத்திணறல் உள்ளது"),
+        ("kn", "ನನಗೆ ತೀವ್ರ ಎದೆ ನೋವು ಮತ್ತು ಉಸಿರಾಟದ ತೊಂದರೆ ಇದೆ"),
+        ("hi", "मुझे सीने में दर्द और सांस लेने में तकलीफ हो रही है"),
+    ]
+    for lang_code, text in urgent_inputs:
+        resp = client.post(
+            "/api/v1/agent/chat",
+            json={"session_id": f"urgent-{lang_code}", "message": text},
+        )
+        assert resp.status_code == 200
+        d = resp.json()
+        assert d["language"] == lang_code
+        assert "108" in d["reply"]
+
+
+def test_end_user_test_1_exact_telugu_conversation_regression(client, seeded_hospital_data):
+    """
+    Reproduces and verifies the exact End-User Test 1 conversation in Telugu:
+    1. User starts in Telugu -> Assistant replies naturally in Telugu (never generic English intro).
+    2. User says 'నాకు తెలియదు ఎవరు' (I don't know who) -> Assistant responds empathetically in Telugu
+       with a helpful follow-up question, without repeating the generic introduction or resetting.
+    3. User reports severe chest pain ('నాకు తీవ్రమైన ఛాతీ నొప్పిగా ఉంది') -> Assistant prioritizes
+       immediate emergency care (108 / 112) in Telugu and does NOT continue routine cardiologist selection.
+    4. User continues describing urgent symptoms -> Assistant repeats concise emergency guidance in Telugu.
+    """
+    from app.agent.adapters import LOCALIZED_MESSAGES, has_expected_language_script
+
+    session_id = "end-user-test-1-telugu"
+
+    # Turn 1: Telugu appointment greeting/request
+    r1 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "నమస్కారం, నాకు డాక్టర్ అపాయింట్‌మెంట్ కావాలి"},
+    )
+    assert r1.status_code == 200
+    d1 = r1.json()
+    assert d1["language"] == "te"
+    assert has_expected_language_script(d1["reply"], "te")
+    assert "Hello! I am the MediVoice" not in d1["reply"]
+
+    # Turn 2: User says "నాకు తెలియదు ఎవరు" (I don't know who)
+    r2 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "నాకు తెలియదు ఎవరు"},
+    )
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert d2["language"] == "te"
+    assert d2["step"] != "CANCELLED"
+    assert has_expected_language_script(d2["reply"], "te")
+    # Must NOT repeat the generic greeting/introduction
+    assert d2["reply"] != LOCALIZED_MESSAGES["te"]["greeting"]
+    assert d2["reply"] != LOCALIZED_MESSAGES["en"]["greeting"]
+    # Must empathetically help the user choose by asking about symptom/department
+    assert "పర్వాలేదు" in d2["reply"]
+    assert "?" in d2["reply"]
+
+    # Turn 3: User reports severe chest pain in Telugu
+    r3 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "నాకు తీవ్రమైన ఛాతీ నొప్పిగా ఉంది"},
+    )
+    assert r3.status_code == 200
+    d3 = r3.json()
+    assert d3["language"] == "te"
+    assert has_expected_language_script(d3["reply"], "te")
+    assert "108" in d3["reply"]
+    assert "112" in d3["reply"]
+    # Must NOT continue into routine cardiologist selection or list Dr. Sharma / Dr. Nair
+    assert "Dr. Rajesh Sharma" not in d3["reply"]
+    assert "Dr. Priya Nair" not in d3["reply"]
+    assert d3["draft"]["doctor_id"] is None
+    assert not any(t["tool_name"] == "search_doctors" for t in d3["tool_trace"])
+
+    # Turn 4: User continues describing urgent symptoms
+    r4 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "ఇంకా నొప్పి ఎక్కువైంది మరియు చెమటలు పడుతున్నాయి"},
+    )
+    assert r4.status_code == 200
+    d4 = r4.json()
+    assert d4["language"] == "te"
+    assert has_expected_language_script(d4["reply"], "te")
+    assert "108" in d4["reply"]
+    assert "Dr. Rajesh Sharma" not in d4["reply"]
+    assert d4["draft"]["doctor_id"] is None
+
+
+def test_uncertainty_handling_all_five_languages_before_and_after_doctor_search(
+    client, seeded_hospital_data
+):
+    """
+    Verifies Requirement B (Handling uncertainty) across all 5 languages (en, te, ta, kn, hi):
+    - Recognizes 'I don't know which doctor' / 'I'm not sure' and native equivalents.
+    - Responds empathetically with a clear follow-up question or next step.
+    - Does not reset/cancel the conversation or repeat the generic introduction.
+    - Does not infer a medical diagnosis from uncertainty.
+    """
+    from app.agent.adapters import LOCALIZED_MESSAGES, has_expected_language_script
+
+    cases = [
+        ("en", "Hello, I need an appointment", "I don't know which doctor to see", "Cardiology", "I'm not sure"),
+        ("te", "నమస్కారం, అపాయింట్‌మెంట్ కావాలి", "నాకు తెలియదు ఎవరు", "కార్డియాలజీ", "నాకు తెలీదు"),
+        ("ta", "வணக்கம், அப்பாயின்ட்மென்ட் வேண்டும்", "எனக்கு தெரியவில்லை எந்த மருத்துவர்", "இதய மருத்துவம்", "எனக்கு தெரியவில்லை"),
+        ("kn", "ನಮಸ್ಕಾರ, ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಬೇಕು", "ನನಗೆ ಗೊತ್ತಿಲ್ಲ ಯಾವ ವೈದ್ಯರು", "ಹೃದ್ರೋಗ ವಿಭಾಗ", "ನನಗೆ ಗೊತ್ತಿಲ್ಲ"),
+        ("hi", "नमस्ते, मुझे अपॉइंटमेंट चाहिए", "मुझे नहीं पता कौन सा डॉक्टर", "कार्डियोलॉजी", "मुझे नहीं पता"),
+    ]
+
+    for lang_code, greet_msg, uncertain_initial, spec_msg, uncertain_after_list in cases:
+        sid = f"uncertain-flow-{lang_code}"
+
+        # 1. Initial greeting
+        r1 = client.post("/api/v1/agent/chat", json={"session_id": sid, "message": greet_msg})
+        assert r1.status_code == 200
+        assert r1.json()["language"] == lang_code
+
+        # 2. Uncertainty before any specialty/doctor is chosen
+        r2 = client.post("/api/v1/agent/chat", json={"session_id": sid, "message": uncertain_initial})
+        d2 = r2.json()
+        assert d2["language"] == lang_code
+        assert d2["step"] != "CANCELLED"
+        assert has_expected_language_script(d2["reply"], lang_code)
+        assert d2["reply"] != LOCALIZED_MESSAGES[lang_code]["greeting"]
+        assert d2["reply"] != LOCALIZED_MESSAGES["en"]["greeting"]
+        assert d2["draft"]["doctor_id"] is None
+
+        # 3. User asks for Cardiology -> doctors are listed
+        r3 = client.post("/api/v1/agent/chat", json={"session_id": sid, "message": spec_msg})
+        d3 = r3.json()
+        assert d3["language"] == lang_code
+        assert "Dr. Rajesh Sharma" in d3["reply"]
+
+        # 4. User expresses uncertainty about which listed doctor to pick
+        r4 = client.post("/api/v1/agent/chat", json={"session_id": sid, "message": uncertain_after_list})
+        d4 = r4.json()
+        assert d4["language"] == lang_code
+        assert d4["step"] != "CANCELLED"
+        assert has_expected_language_script(d4["reply"], lang_code)
+        assert "Dr. Rajesh Sharma" in d4["reply"]
+        assert d4["reply"] != LOCALIZED_MESSAGES[lang_code]["greeting"]
+
+
+def test_severe_emergency_priority_halts_routine_booking_all_five_languages(
+    client, seeded_hospital_data
+):
+    """
+    Verifies Requirement C (Emergency priority) across all 5 languages (en, te, ta, kn, hi):
+    - Severe chest pain or life-threatening symptoms advise immediate emergency evaluation (108 / 112).
+    - Routine doctor selection or slot booking is NOT continued in the same response.
+    - Follow-up urgent symptom messages repeat concise safety guidance rather than routine booking.
+    """
+    from app.agent.adapters import has_expected_language_script
+
+    emergency_cases = [
+        (
+            "en",
+            "I am having severe chest pain and sweating",
+            "The pain is spreading to my left arm and I feel dizzy",
+        ),
+        (
+            "te",
+            "నాకు తీవ్రమైన ఛాతీ నొప్పిగా ఉంది, ఊపిరి ఆడటం లేదు",
+            "నొప్పి ఇంకా ఎక్కువగా ఉంది, తల తిరుగుతోంది",
+        ),
+        (
+            "ta",
+            "எனக்கு கடுமையான நெஞ்சு வலி மற்றும் மூச்சுத்திணறல் உள்ளது",
+            "வலி அதிகமாகிறது மற்றும் வியர்க்கிறது",
+        ),
+        (
+            "kn",
+            "ನನಗೆ ತೀವ್ರ ಎದೆ ನೋವು ಮತ್ತು ಉಸಿರಾಟದ ತೊಂದರೆ ಇದೆ",
+            "ನೋವು ಇನ್ನೂ ಹೆಚ್ಚಾಗುತ್ತಿದೆ ಮತ್ತು ಬೆವರುತ್ತಿದೆ",
+        ),
+        (
+            "hi",
+            "मुझे तेज सीने में दर्द हो रहा है और सांस लेने में तकलीफ है",
+            "दर्द और बढ़ रहा है और पसीना आ रहा है",
+        ),
+    ]
+
+    for lang_code, msg1, msg2 in emergency_cases:
+        sid = f"severe-emergency-{lang_code}"
+
+        # Turn 1: Severe symptom
+        r1 = client.post("/api/v1/agent/chat", json={"session_id": sid, "message": msg1})
+        assert r1.status_code == 200
+        d1 = r1.json()
+        assert d1["language"] == lang_code
+        assert has_expected_language_script(d1["reply"], lang_code)
+        assert "108" in d1["reply"]
+        assert "112" in d1["reply"]
+        # Routine doctor list must NOT appear
+        assert "Dr. Rajesh Sharma" not in d1["reply"]
+        assert "Dr. Priya Nair" not in d1["reply"]
+        assert d1["draft"]["doctor_id"] is None
+        assert len(d1["tool_trace"]) == 0
+
+        # Turn 2: Continued urgent symptoms
+        r2 = client.post("/api/v1/agent/chat", json={"session_id": sid, "message": msg2})
+        assert r2.status_code == 200
+        d2 = r2.json()
+        assert d2["language"] == lang_code
+        assert has_expected_language_script(d2["reply"], lang_code)
+        assert "108" in d2["reply"]
+        assert "Dr. Rajesh Sharma" not in d2["reply"]
+        assert d2["draft"]["doctor_id"] is None
+        assert len(d2["tool_trace"]) == 0
+
+
+def test_language_consistency_preserved_across_english_inputs_and_gemini_fallback(
+    db_session, seeded_hospital_data
+):
+    """
+    Verifies Requirement A (Language consistency):
+    - Once a Telugu (or other Indic) conversation is underway, short English/Latin replies or
+      general questions do not reset session.language to English unless the user explicitly switches.
+    - If GeminiReasoningAdapter returns an unlocalized English fallback during an active Telugu session,
+      ensure_response_in_session_language replaces it with the localized Telugu response.
+    """
+    import httpx
+    from app.agent.adapters import GeminiReasoningAdapter, has_expected_language_script
+
+    def english_leaking_gemini_transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [
+                                {
+                                    "text": (
+                                        "Hello! I am the MediVoice Hospital Assistant for Aarogya One Hospital. "
+                                        "Which specialty or symptoms do you need consultation for?\n"
+                                        "<draft>{}</draft>"
+                                    )
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    mock_client = httpx.Client(transport=httpx.MockTransport(english_leaking_gemini_transport))
+    adapter = GeminiReasoningAdapter(api_key="mock-key", http_client=mock_client)
+    manager = ConversationManager(adapter=adapter)
+
+    # Turn 1: User speaks Telugu, model tries to reply in generic English -> post-processor enforces Telugu
+    r1 = manager.process_message(
+        db=db_session,
+        session_id="te-sticky-session",
+        message="నమస్కారం, నాకు అపాయింట్‌మెంట్ కావాలి",
+    )
+    assert r1.language == "te"
+    assert has_expected_language_script(r1.reply, "te")
+    assert "Hello! I am the MediVoice" not in r1.reply
+
+    # Turn 2: User sends an English phrase without an explicit language switch -> Telugu is preserved
+    r2 = manager.process_message(
+        db=db_session,
+        session_id="te-sticky-session",
+        message="I don't know which doctor",
+    )
+    assert r2.language == "te"
+    assert has_expected_language_script(r2.reply, "te")
+    assert "పర్వాలేదు" in r2.reply
+
+    # Turn 3: User explicitly switches to English -> language switches to 'en'
+    r3 = manager.process_message(
+        db=db_session,
+        session_id="te-sticky-session",
+        message="switch to English",
+    )
+    assert r3.language == "en"
+
+
+# ==============================================================================
+# End-User Regression Fix: Context and Follow-Through (Bug 1 & Bug 2)
+# ==============================================================================
+
+
+def _seed_general_medicine_vikram_mehta(db_session, seeded_hospital_data):
+    """Seeds General Medicine department, Dr. Vikram Mehta, and open slots matching production seed_data.py."""
+    from datetime import datetime, timedelta, timezone
+    from app.models.department import Department
+    from app.models.doctor import Doctor
+
+    hosp = seeded_hospital_data["hospital"]
+    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+    gen_dept = Department(
+        id="test-dept-genmed",
+        hospital_id=hosp.id,
+        name="General Medicine",
+        description="Internal Medicine and Primary Care",
+        is_active=True,
+    )
+    db_session.add(gen_dept)
+    db_session.flush()
+
+    doc_mehta = Doctor(
+        id="doc-mehta-5",
+        hospital_id=hosp.id,
+        department_id=gen_dept.id,
+        display_name="Dr. Vikram Mehta",
+        specialty="General Medicine",
+        is_active=True,
+    )
+    db_session.add(doc_mehta)
+    db_session.flush()
+
+    slot_mehta_1 = AppointmentSlot(
+        id="slot-mehta-avail-1",
+        doctor_id=doc_mehta.id,
+        start_time=now_utc + timedelta(days=1, hours=9),
+        end_time=now_utc + timedelta(days=1, hours=9, minutes=30),
+        status="AVAILABLE",
+    )
+    slot_mehta_2 = AppointmentSlot(
+        id="slot-mehta-avail-2",
+        doctor_id=doc_mehta.id,
+        start_time=now_utc + timedelta(days=1, hours=11),
+        end_time=now_utc + timedelta(days=1, hours=11, minutes=30),
+        status="AVAILABLE",
+    )
+    db_session.add_all([slot_mehta_1, slot_mehta_2])
+    db_session.commit()
+    return doc_mehta
+
+
+def test_bug1_telugu_sare_executes_pending_slot_offer_without_restarting(
+    client, db_session, seeded_hospital_data
+):
+    """
+    Reproduces and verifies Bug 1 (Telugu 'సరే' following an offer to show slots):
+    1. Patient reports fever ('జ్వరం') -> Agent identifies General Medicine & Dr. Vikram Mehta.
+    2. Patient says 'నాకు తెలియదు ఎవరు' (I do not know which doctor to choose).
+    3. Agent offers to show Dr. Vikram Mehta's earliest available slots.
+    4. Patient replies 'సరే' (Okay).
+    5. Agent executes get_available_slots for Dr. Vikram Mehta and displays real slots,
+       preserving Telugu language, visit reason ('జ్వరం'), and selected doctor without
+       restarting symptom collection.
+    """
+    from app.agent.adapters import LOCALIZED_MESSAGES, has_expected_language_script
+
+    _seed_general_medicine_vikram_mehta(db_session, seeded_hospital_data)
+    session_id = "bug1-telugu-sare-follow-through"
+
+    # Turn 1: Patient reports fever in Telugu
+    r1 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "నాకు జ్వరం ఉంది"},
+    )
+    assert r1.status_code == 200
+    d1 = r1.json()
+    assert d1["language"] == "te"
+    assert d1["step"] == "COLLECTING_DOCTOR"
+    assert d1["draft"]["specialty"] == "General Medicine"
+    assert d1["draft"]["reason_category"] == "జ్వరం"
+    assert "Dr. Vikram Mehta" in d1["reply"]
+    assert has_expected_language_script(d1["reply"], "te")
+
+    # Turn 2: Patient says they do not know which doctor to choose
+    r2 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "నాకు తెలియదు ఎవరు"},
+    )
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert d2["language"] == "te"
+    assert "Dr. Vikram Mehta" in d2["reply"]
+    assert has_expected_language_script(d2["reply"], "te")
+
+    # Turn 3: Patient replies 'సరే' (Okay) -> must execute get_available_slots for Dr. Vikram Mehta!
+    r3 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "సరే"},
+    )
+    assert r3.status_code == 200
+    d3 = r3.json()
+    assert d3["language"] == "te"
+    assert d3["step"] == "COLLECTING_SLOT"
+    assert d3["draft"]["doctor_id"] == "doc-mehta-5"
+    assert d3["draft"]["doctor_name"] == "Dr. Vikram Mehta"
+    assert d3["draft"]["specialty"] == "General Medicine"
+    assert d3["draft"]["reason_category"] == "జ్వరం"
+    # Must NOT restart symptom collection (clarify_need or greeting)
+    assert d3["reply"] != LOCALIZED_MESSAGES["te"]["clarify_need"]
+    assert d3["reply"] != LOCALIZED_MESSAGES["te"]["greeting"]
+    # Real slots from backend tool must be present
+    assert "slot-mehta-avail-1" in d3["reply"]
+    assert "slot-mehta-avail-2" in d3["reply"]
+    assert any(
+        t["tool_name"] == "get_available_slots"
+        and t["success"]
+        and any(s["slot_id"] == "slot-mehta-avail-1" for s in t["data"])
+        for t in d3["tool_trace"]
+    )
+
+
+def test_bug1_contextual_affirmative_replies_in_all_five_languages(
+    client, db_session, seeded_hospital_data
+):
+    """
+    Verifies equivalent contextual affirmative replies in all 5 supported languages
+    (English 'okay', Telugu 'సరే', Tamil 'சரி', Kannada 'ಸರಿ', Hindi 'ठीक है')
+    execute the pending offered slot lookup via get_available_slots without resetting context.
+    """
+    from app.agent.adapters import LOCALIZED_MESSAGES, has_expected_language_script
+
+    _seed_general_medicine_vikram_mehta(db_session, seeded_hospital_data)
+
+    cases = [
+        ("en", "I have fever", "I don't know which doctor", "okay"),
+        ("te", "నాకు జ్వరం ఉంది", "నాకు తెలియదు ఎవరు", "సరే"),
+        ("ta", "எனக்கு காய்ச்சல் உள்ளது", "எனக்கு தெரியவில்லை எந்த மருத்துவர்", "சரி"),
+        ("kn", "ನನಗೆ ಜ್ವರ ಇದೆ", "ನನಗೆ ಗೊತ್ತಿಲ್ಲ ಯಾವ ವೈದ್ಯರು", "ಸರಿ"),
+        ("hi", "मुझे बुखार है", "मुझे नहीं पता कौन सा डॉक्टर", "ठीक है"),
+    ]
+
+    for lang_code, symptom_msg, uncertain_msg, affirm_msg in cases:
+        sid = f"bug1-all-langs-{lang_code}"
+
+        # 1. Report fever -> identifies General Medicine & Dr. Vikram Mehta
+        r1 = client.post("/api/v1/agent/chat", json={"session_id": sid, "message": symptom_msg})
+        assert r1.status_code == 200
+        d1 = r1.json()
+        assert d1["language"] == lang_code
+        assert d1["draft"]["specialty"] == "General Medicine"
+        assert "Dr. Vikram Mehta" in d1["reply"]
+
+        # 2. Express uncertainty -> assistant offers to show Dr. Vikram Mehta's earliest available slots
+        r2 = client.post("/api/v1/agent/chat", json={"session_id": sid, "message": uncertain_msg})
+        assert r2.status_code == 200
+        d2 = r2.json()
+        assert d2["language"] == lang_code
+        assert "Dr. Vikram Mehta" in d2["reply"]
+
+        # 3. Reply with contextual affirmative ('okay', 'సరే', 'சரி', 'ಸರಿ', 'ठीक है') -> retrieves slots
+        r3 = client.post("/api/v1/agent/chat", json={"session_id": sid, "message": affirm_msg})
+        assert r3.status_code == 200
+        d3 = r3.json()
+        assert d3["language"] == lang_code
+        assert has_expected_language_script(d3["reply"], lang_code)
+        assert d3["step"] == "COLLECTING_SLOT"
+        assert d3["draft"]["doctor_id"] == "doc-mehta-5"
+        assert d3["draft"]["doctor_name"] == "Dr. Vikram Mehta"
+        assert d3["draft"]["specialty"] == "General Medicine"
+        assert d3["draft"]["reason_category"] is not None
+        assert "slot-mehta-avail-1" in d3["reply"]
+        assert d3["reply"] != LOCALIZED_MESSAGES[lang_code]["clarify_need"]
+        assert any(t["tool_name"] == "get_available_slots" and t["success"] for t in d3["tool_trace"])
+
+
+def test_bug1_generic_affirmative_does_not_trigger_booking_without_explicit_confirmation(
+    client, db_session, seeded_hospital_data
+):
+    """
+    Verifies safety requirement:
+    Generic contextual affirmative replies ('okay', 'ok', 'sure', 'సరే', 'சரி', 'ಸರಿ', 'ठीक है')
+    must NOT trigger `book_appointment` when the session is at `AWAITING_CONFIRMATION`.
+    Booking confirmation remains a separate, explicit step ('YES', 'CONFIRM', 'అవును', 'ஆம்', 'ಹೌದು', 'हाँ').
+    """
+    _seed_general_medicine_vikram_mehta(db_session, seeded_hospital_data)
+
+    lang_cases = [
+        ("te", "సరే", "అవును", "PAT-2026-SAFE-TE"),
+        ("en", "okay", "YES", "PAT-2026-SAFE-EN"),
+        ("ta", "சரி", "ஆம்", "PAT-2026-SAFE-TA"),
+        ("kn", "ಸರಿ", "ಹೌದು", "PAT-2026-SAFE-KN"),
+        ("hi", "ठीक है", "हाँ", "PAT-2026-SAFE-HI"),
+    ]
+
+    for idx, (lang_code, generic_ok, explicit_yes, pat_ref) in enumerate(lang_cases):
+        # Add an open slot for each test iteration so each language can complete booking
+        from datetime import datetime, timedelta, timezone
+
+        now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+        slot_id = f"slot-mehta-safe-{idx}"
+        db_session.add(
+            AppointmentSlot(
+                id=slot_id,
+                doctor_id="doc-mehta-5",
+                start_time=now_utc + timedelta(days=2, hours=idx + 1),
+                end_time=now_utc + timedelta(days=2, hours=idx + 1, minutes=30),
+                status="AVAILABLE",
+            )
+        )
+        db_session.commit()
+
+        sid = f"no-premature-book-{lang_code}"
+        client.post(
+            "/api/v1/agent/chat",
+            json={"session_id": sid, "message": "Dr. Vikram Mehta", "patient_reference": pat_ref},
+        )
+        client.post("/api/v1/agent/chat", json={"session_id": sid, "message": slot_id})
+        r_ready = client.post(
+            "/api/v1/agent/chat",
+            json={"session_id": sid, "message": "reason: fever"},
+        )
+        assert r_ready.json()["step"] == "AWAITING_CONFIRMATION"
+        assert r_ready.json()["confirmation_status"] == "PENDING"
+
+        # Send generic 'okay' / 'సరే' / 'சரி' / 'ಸರಿ' / 'ठीक है' -> MUST NOT BOOK!
+        r_generic = client.post(
+            "/api/v1/agent/chat",
+            json={"session_id": sid, "message": generic_ok},
+        )
+        d_generic = r_generic.json()
+        assert d_generic["step"] == "AWAITING_CONFIRMATION"
+        assert d_generic["confirmation_status"] == "PENDING"
+        assert d_generic["booked_appointment"] is None
+        assert not any(t["tool_name"] == "book_appointment" for t in d_generic["tool_trace"])
+
+        # Verify no appointment exists in DB for pat_ref yet
+        appts_before = db_session.scalars(
+            select(Appointment).where(Appointment.patient_reference == pat_ref)
+        ).all()
+        assert len(appts_before) == 0
+
+        # Now send EXPLICIT confirmation ('అవును', 'YES', 'ஆம்', 'ಹೌದು', 'हाँ') -> commits booking!
+        r_explicit = client.post(
+            "/api/v1/agent/chat",
+            json={"session_id": sid, "message": explicit_yes},
+        )
+        d_explicit = r_explicit.json()
+        assert d_explicit["step"] == "BOOKED"
+        assert d_explicit["confirmation_status"] == "CONFIRMED"
+        assert d_explicit["booked_appointment"] is not None
+        assert d_explicit["booked_appointment"]["patient_reference"] == pat_ref
+
+
+def test_bug2_fever_followed_by_fever_and_headache_preserves_general_medicine(
+    client, db_session, seeded_hospital_data
+):
+    """
+    Reproduces and verifies Bug 2 (Multiple symptoms trigger an unjustified specialty switch):
+    1. Patient reports fever ('జ్వరం') -> Agent identifies General Medicine and offers Dr. Vikram Mehta.
+    2. Patient adds 'జ్వరం, తలనొప్పి' (fever, headache).
+    3. Agent preserves General Medicine and Dr. Vikram Mehta, updates reason_category to 'జ్వరం, తలనొప్పి',
+       and does NOT switch to Neurology or Dr. Priya Nair.
+    4. Patient replies 'సరే' (Okay) -> Agent retrieves Dr. Vikram Mehta's slots, and completes booking
+       while preserving language ('te'), visit reason ('జ్వరం, తలనొప్పి'), selected doctor, and booking state.
+    """
+    from app.agent.adapters import has_expected_language_script
+
+    _seed_general_medicine_vikram_mehta(db_session, seeded_hospital_data)
+    session_id = "bug2-telugu-fever-headache"
+
+    # Turn 1: Patient reports fever in Telugu ('జ్వరం')
+    r1 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "జ్వరం"},
+    )
+    assert r1.status_code == 200
+    d1 = r1.json()
+    assert d1["language"] == "te"
+    assert d1["draft"]["specialty"] == "General Medicine"
+    assert d1["draft"]["reason_category"] == "జ్వరం"
+    assert "Dr. Vikram Mehta" in d1["reply"]
+    assert "Dr. Priya Nair" not in d1["reply"]
+
+    # Turn 2: Patient adds 'జ్వరం, తలనొప్పి' (fever, headache)
+    r2 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "జ్వరం, తలనొప్పి"},
+    )
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert d2["language"] == "te"
+    assert has_expected_language_script(d2["reply"], "te")
+    # Must preserve General Medicine and Dr. Vikram Mehta (never switch to Neurology / Dr. Priya Nair)
+    assert d2["draft"]["specialty"] == "General Medicine"
+    assert d2["draft"]["reason_category"] == "జ్వరం, తలనొప్పి"
+    assert "Dr. Vikram Mehta" in d2["reply"]
+    assert "Dr. Priya Nair" not in d2["reply"]
+    assert "Neurology" not in d2["reply"]
+
+    # Turn 3: Patient accepts the offer to see Dr. Vikram Mehta's slots with 'సరే'
+    r3 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "సరే"},
+    )
+    assert r3.status_code == 200
+    d3 = r3.json()
+    assert d3["language"] == "te"
+    assert d3["step"] == "COLLECTING_SLOT"
+    assert d3["draft"]["doctor_id"] == "doc-mehta-5"
+    assert d3["draft"]["doctor_name"] == "Dr. Vikram Mehta"
+    assert d3["draft"]["specialty"] == "General Medicine"
+    assert d3["draft"]["reason_category"] == "జ్వరం, తలనొప్పి"
+    assert "slot-mehta-avail-1" in d3["reply"]
+
+    # Turn 4: Select slot -> since reason_category ('జ్వరం, తలనొప్పి') is already preserved, asks only for patient_reference!
+    r4 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "slot-mehta-avail-1"},
+    )
+    d4 = r4.json()
+    assert d4["language"] == "te"
+    assert d4["step"] == "COLLECTING_DETAILS"
+    assert d4["missing_details"] == ["patient_reference"]
+    assert d4["draft"]["reason_category"] == "జ్వరం, తలనొప్పి"
+
+    # Turn 5: Provide patient reference -> enters AWAITING_CONFIRMATION with preserved reason and doctor
+    r5 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "PAT-2026-BUG12"},
+    )
+    d5 = r5.json()
+    assert d5["language"] == "te"
+    assert d5["step"] == "AWAITING_CONFIRMATION"
+    assert d5["confirmation_status"] == "PENDING"
+    assert "Dr. Vikram Mehta" in d5["reply"]
+    assert "జ్వరం, తలనొప్పి" in d5["reply"]
+    assert "PAT-2026-BUG12" in d5["reply"]
+
+    # Turn 6: Explicit confirmation in Telugu ('అవును') -> books appointment
+    r6 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "అవును"},
+    )
+    d6 = r6.json()
+    assert d6["language"] == "te"
+    assert d6["step"] == "BOOKED"
+    assert d6["confirmation_status"] == "CONFIRMED"
+    assert d6["booked_appointment"]["doctor_name"] == "Dr. Vikram Mehta"
+    assert d6["booked_appointment"]["slot_id"] == "slot-mehta-avail-1"
+    assert d6["booked_appointment"]["patient_reference"] == "PAT-2026-BUG12"
+
+
+def test_bug2_explicit_user_requested_specialty_change_still_works(
+    client, db_session, seeded_hospital_data
+):
+    """
+    Verifies that while adding a common secondary symptom ('జ్వరం, తలనొప్పి') preserves General Medicine,
+    an EXPLICIT user-requested specialty change (e.g. 'నాకు న్యూరాలజిస్ట్ కావాలి' or 'switch to Neurology instead')
+    correctly switches to Neurology and Dr. Priya Nair.
+    """
+    _seed_general_medicine_vikram_mehta(db_session, seeded_hospital_data)
+    session_id = "bug2-explicit-specialty-change"
+
+    # Turn 1: Fever -> General Medicine (Dr. Vikram Mehta)
+    r1 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "జ్వరం"},
+    )
+    assert r1.json()["draft"]["specialty"] == "General Medicine"
+    assert "Dr. Vikram Mehta" in r1.json()["reply"]
+
+    # Turn 2: Patient explicitly requests a Neurologist in Telugu ('నాకు న్యూరాలజిస్ట్ కావాలి')
+    r2 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "నాకు న్యూరాలజిస్ట్ కావాలి"},
+    )
+    d2 = r2.json()
+    assert d2["language"] == "te"
+    assert d2["draft"]["specialty"] == "Neurology"
+    assert "Dr. Priya Nair" in d2["reply"]
+
+    # Also verify explicit specialty switch after a doctor was already selected
+    session_id_2 = "bug2-explicit-switch-after-doc"
+    client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id_2, "message": "Dr. Vikram Mehta"},
+    )
+    r_switch = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id_2, "message": "Actually switch to Neurology instead"},
+    )
+    d_switch = r_switch.json()
+    assert d_switch["draft"]["specialty"] == "Neurology"
+    assert d_switch["draft"]["doctor_id"] is None
+    assert "Dr. Priya Nair" in d_switch["reply"]
+
+
+def test_agent_lab_report_status_without_code_then_valid_and_invalid_followup(
+    client, seeded_hospital_data
+):
+    """
+    Conversational flow for lab report verification:
+    1. User asks for lab report status without a code -> Agent asks for the 6-digit verification code.
+    2. User enters a malformed code ('12345') -> Agent explains 6-digit requirement and stays ready.
+    3. User enters an unknown 6-digit code ('999999') -> Agent explains code is invalid/expired.
+    4. User enters a valid 6-digit code with leading zero ('048271') -> Agent calls check_lab_report_status
+       and returns verified status without exposing patient_reference or internal IDs.
+    """
+    from app.services.lab_service import reset_verification_rate_limits
+
+    reset_verification_rate_limits()
+    session_id = "agent-lab-flow-en"
+
+    # Turn 1: Ask for lab report status without code
+    r1 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "I want to check my lab report status"},
+    )
+    assert r1.status_code == 200
+    d1 = r1.json()
+    assert "6-digit" in d1["reply"] or "verification code" in d1["reply"].lower()
+    assert not any(t["tool_name"] == "check_lab_report_status" for t in d1["tool_trace"])
+
+    # Turn 2: Provide malformed 5-digit code ('12345')
+    r2 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "12345"},
+    )
+    assert r2.status_code == 200
+    d2 = r2.json()
+    assert any(t["tool_name"] == "check_lab_report_status" for t in d2["tool_trace"])
+    assert "6 digits" in d2["reply"] or "6-digit" in d2["reply"]
+
+    # Turn 3: Provide unknown 6-digit code ('999999')
+    r3 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "999999"},
+    )
+    assert r3.status_code == 200
+    d3 = r3.json()
+    assert "invalid or expired" in d3["reply"].lower()
+
+    # Turn 4: Provide valid 6-digit code ('048271')
+    r4 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "048271"},
+    )
+    assert r4.status_code == 200
+    d4 = r4.json()
+    assert "Cardiac Troponin I & Lipid Profile" in d4["reply"]
+    assert "PROCESSING" in d4["reply"] or "Processing" in d4["reply"]
+    # Privacy check: never expose synthetic patient_reference or internal order ID
+    assert "PAT-1001" not in d4["reply"]
+    assert "lab-overdue-1" not in d4["reply"]
+
+
+def test_agent_lab_report_status_multilingual_all_5_languages(client, seeded_hospital_data):
+    """
+    Verifies conversational lab report status verification across all 5 languages
+    (English, Telugu, Hindi, Tamil, Kannada) in both native script and Romanized forms.
+    """
+    from app.agent.adapters import has_expected_language_script
+    from app.services.lab_service import reset_verification_rate_limits
+
+    multilingual_cases = [
+        ("en", "Check my lab report status", "048271", False),
+        ("te", "నా ల్యాబ్ రిపోర్ట్ స్టేటస్ చెప్పండి", "048271", True),
+        ("hi", "मेरी लैब रिपोर्ट का स्टेटस क्या है?", "839201", True),
+        ("ta", "என் லேப் ரிப்போர்ட் நிலை என்ன?", "048271", True),
+        ("kn", "ನನ್ನ ಲ್ಯಾಬ್ ವರದಿ ಸ್ಥಿತಿ ಏನು?", "839201", True),
+        ("te", "naa lab report status cheppandi code 048271", None, True),
+        ("hi", "meri lab report status bataiye code 839201", None, True),
+        ("ta", "enaku lab report status venum code 048271", None, True),
+        ("kn", "nanage lab report status beku code 839201", None, True),
+    ]
+
+    for idx, (expected_lang, first_msg, follow_up_code, expect_indic_script) in enumerate(multilingual_cases):
+        reset_verification_rate_limits()
+        sid = f"agent-lab-lang-{expected_lang}-{idx}"
+        r1 = client.post(
+            "/api/v1/agent/chat",
+            json={"session_id": sid, "message": first_msg},
+        )
+        assert r1.status_code == 200
+        d1 = r1.json()
+        assert d1["language"] == expected_lang
+        if expect_indic_script:
+            assert has_expected_language_script(d1["reply"], expected_lang)
+
+        if follow_up_code is not None:
+            r2 = client.post(
+                "/api/v1/agent/chat",
+                json={"session_id": sid, "message": follow_up_code},
+            )
+            assert r2.status_code == 200
+            d2 = r2.json()
+            assert d2["language"] == expected_lang
+            if expect_indic_script:
+                assert has_expected_language_script(d2["reply"], expected_lang)
+            assert any(t["tool_name"] == "check_lab_report_status" and t["success"] for t in d2["tool_trace"])
+            assert "PAT-1001" not in d2["reply"] and "PAT-1002" not in d2["reply"]
+        else:
+            assert any(t["tool_name"] == "check_lab_report_status" and t["success"] for t in d1["tool_trace"])
+
+
+def test_agent_hospital_insurance_queries_and_multilingual_support(client, seeded_hospital_data):
+    """
+    Verifies hospital insurance queries through the conversational agent across all 5 languages:
+    - Provider acceptance & plan coverage details
+    - Cashless vs reimbursement filtering
+    - Unsupported provider fallback with Insurance Desk contact
+    - Mandatory non-guarantee disclaimer in every response
+    """
+    from app.agent.adapters import has_expected_language_script
+
+    # 1. General accepted insurance providers query (English)
+    r_en = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": "ins-en-1", "message": "Which insurance providers and cashless plans are accepted?"},
+    )
+    assert r_en.status_code == 200
+    d_en = r_en.json()
+    assert any(t["tool_name"] == "search_hospital_insurance" and t["success"] for t in d_en["tool_trace"])
+    assert "Aarogya Shield Health Insurance" in d_en["reply"]
+    assert "Legacy Metro" not in d_en["reply"]
+    assert "does not guarantee coverage" in d_en["reply"]
+
+    # 2. Unsupported insurance provider query
+    r_unsup = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": "ins-en-unsup", "message": "Do you accept StarMax insurance?"},
+    )
+    assert r_unsup.status_code == 200
+    d_unsup = r_unsup.json()
+    assert "not currently listed" in d_unsup["reply"].lower()
+    assert "1800-100-4200" in d_unsup["reply"]
+    assert "does not guarantee coverage" in d_unsup["reply"]
+
+    # 3. Multilingual insurance queries (Telugu, Hindi, Tamil, Kannada - native & Romanized)
+    ins_cases = [
+        ("te", "మీ హాస్పిటల్‌లో ఏ ఇన్సూరెన్స్ మరియు క్యాష్‌లెస్ ప్లాన్లు అంగీకరిస్తారు?"),
+        ("hi", "आपके अस्पताल में कौन सा कैशलेस स्वास्थ्य बीमा और मेडिक्लेम स्वीकार किया जाता है?"),
+        ("ta", "உங்கள் மருத்துவமனையில் எந்த மருத்துவ காப்பீடு மற்றும் கேஷ்லெஸ் திட்டங்கள் ஏற்றுக்கொள்ளப்படுகின்றன?"),
+        ("kn", "ನಿಮ್ಮ ಆಸ್ಪತ್ರೆಯಲ್ಲಿ ಯಾವ ಆರೋಗ್ಯ ವಿಮೆ ಮತ್ತು ಕ್ಯಾಶ್‌ಲೆಸ್ ಯೋಜನೆಗಳನ್ನು ಸ್ವೀಕರಿಸಲಾಗುತ್ತದೆ?"),
+        ("te", "naaku insurance cashless details kavali"),
+        ("hi", "mujhe cashless bima aur insurance plan chahiye"),
+    ]
+    for idx, (lang_code, msg) in enumerate(ins_cases):
+        r_lang = client.post(
+            "/api/v1/agent/chat",
+            json={"session_id": f"ins-lang-{lang_code}-{idx}", "message": msg},
+        )
+        assert r_lang.status_code == 200
+        d_lang = r_lang.json()
+        assert d_lang["language"] == lang_code
+        assert has_expected_language_script(d_lang["reply"], lang_code)
+        assert "Aarogya Shield Health Insurance" in d_lang["reply"]
+        assert "does not guarantee coverage" in d_lang["reply"]
+
+
+def test_agent_preserves_booking_state_during_mid_flow_lab_and_insurance_questions(
+    client, db_session, seeded_hospital_data
+):
+    """
+    When a patient is in the middle of booking an appointment (e.g., in Telugu with doctor, slot,
+    reason, and patient reference already collected at AWAITING_CONFIRMATION) and asks about
+    hospital insurance or checks a lab report status, the agent answers the inquiry accurately
+    WITHOUT losing the active language, doctor, slot, visit reason, or confirmation state.
+    """
+    from app.services.lab_service import reset_verification_rate_limits
+
+    reset_verification_rate_limits()
+    session_id = "mid-booking-lab-and-insurance-preserve"
+    pat_ref = "PAT-2026-9900"
+
+    # Turn 1: Select Dr. Rajesh Sharma in Telugu
+    r1 = client.post(
+        "/api/v1/agent/chat",
+        json={
+            "session_id": session_id,
+            "message": "డాక్టర్ రాజేష్ శర్మ గారితో అపాయింట్‌మెంట్ కావాలి",
+            "patient_reference": pat_ref,
+        },
+    )
+    assert r1.json()["language"] == "te"
+    assert r1.json()["step"] == "COLLECTING_SLOT"
+
+    # Turn 2: Select slot-sharma-avail-1 and provide reason -> reaches AWAITING_CONFIRMATION
+    r2 = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "slot-sharma-avail-1 గుండె దడ"},
+    )
+    d2 = r2.json()
+    assert d2["language"] == "te"
+    assert d2["step"] == "AWAITING_CONFIRMATION"
+    assert d2["confirmation_status"] == "PENDING"
+    assert d2["draft"]["doctor_id"] == "doc-sharma-1"
+    assert d2["draft"]["slot_id"] == "slot-sharma-avail-1"
+    assert d2["draft"]["reason_category"] == "గుండె దడ"
+
+    # Turn 3: Mid-booking, patient asks about insurance in Telugu
+    r_ins = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "మీ హాస్పిటల్‌లో ఆరోగ్య షీల్డ్ ఇన్సూరెన్స్ అంగీకరిస్తారా?"},
+    )
+    d_ins = r_ins.json()
+    assert d_ins["language"] == "te"
+    assert "Aarogya Shield Health Insurance" in d_ins["reply"]
+    # Booking draft and confirmation state must remain completely intact!
+    assert d_ins["step"] == "AWAITING_CONFIRMATION"
+    assert d_ins["confirmation_status"] == "PENDING"
+    assert d_ins["draft"]["doctor_id"] == "doc-sharma-1"
+    assert d_ins["draft"]["slot_id"] == "slot-sharma-avail-1"
+    assert d_ins["draft"]["reason_category"] == "గుండె దడ"
+    assert d_ins["draft"]["patient_reference"] == pat_ref
+
+    # Turn 4: Mid-booking, patient checks lab report status with code '048271'
+    r_lab = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "నా ల్యాబ్ రిపోర్ట్ కోడ్ 048271 స్టేటస్ చెప్పండి"},
+    )
+    d_lab = r_lab.json()
+    assert d_lab["language"] == "te"
+    assert "Cardiac Troponin I & Lipid Profile" in d_lab["reply"]
+    # Booking draft and confirmation state still intact!
+    assert d_lab["step"] == "AWAITING_CONFIRMATION"
+    assert d_lab["confirmation_status"] == "PENDING"
+    assert d_lab["draft"]["doctor_id"] == "doc-sharma-1"
+    assert d_lab["draft"]["slot_id"] == "slot-sharma-avail-1"
+    assert d_lab["draft"]["reason_category"] == "గుండె దడ"
+    assert d_lab["draft"]["patient_reference"] == pat_ref
+
+    # Turn 5: Patient explicitly confirms the pending appointment in Telugu ('అవును')
+    r_confirm = client.post(
+        "/api/v1/agent/chat",
+        json={"session_id": session_id, "message": "అవును"},
+    )
+    d_confirm = r_confirm.json()
+    assert d_confirm["language"] == "te"
+    assert d_confirm["step"] == "BOOKED"
+    assert d_confirm["confirmation_status"] == "CONFIRMED"
+    assert d_confirm["booked_appointment"]["doctor_name"] == "Dr. Rajesh Sharma"
+    assert d_confirm["booked_appointment"]["slot_id"] == "slot-sharma-avail-1"
+    assert d_confirm["booked_appointment"]["patient_reference"] == pat_ref
+

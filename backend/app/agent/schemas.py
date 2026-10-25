@@ -91,6 +91,8 @@ class AgentSessionState(BaseModel):
     draft: BookingDraft = Field(default_factory=BookingDraft)
     confirmation_status: ConfirmationStatus = ConfirmationStatus.NONE
     confirmed_draft_fingerprint: Optional[str] = None
+    pending_action: Optional[str] = None
+    pending_action_data: Dict[str, Any] = Field(default_factory=dict)
     history: List[ChatMessage] = Field(default_factory=list)
     tool_trace: List[ToolExecutionResult] = Field(default_factory=list)
     booked_appointment: Optional[Dict[str, Any]] = None
