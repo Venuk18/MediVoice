@@ -33,6 +33,19 @@ class DoctorCreate(DoctorBase):
     pass
 
 
+class DoctorManageCreate(BaseModel):
+    hospital_id: str = Field(default="11111111-1111-1111-1111-111111111111")
+    department_id: Optional[str] = None
+    department_name: Optional[str] = Field(default="General Medicine")
+    display_name: str = Field(..., min_length=3, max_length=150)
+    specialty: str = Field(..., min_length=2, max_length=100)
+
+
+class DoctorSlotCreateRequest(BaseModel):
+    start_time: datetime
+    end_time: datetime
+
+
 class DoctorRead(DoctorBase):
     id: str
     created_at: datetime
@@ -44,3 +57,4 @@ class DoctorRead(DoctorBase):
 
 class DoctorDetailRead(DoctorRead):
     slots: List[AppointmentSlotRead] = []
+

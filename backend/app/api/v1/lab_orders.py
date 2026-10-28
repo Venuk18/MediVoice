@@ -2,6 +2,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
+from app.core.security import StaffRole, require_staff_roles
 from app.db.session import get_db
 from app.schemas.lab_order import (
     LabOrderCreate,
@@ -14,6 +15,21 @@ from app.schemas.lab_order import (
 from app.services import lab_service
 
 router = APIRouter(prefix="/lab-orders", tags=["Lab Orders"])
+
+_require_lab_operator_role = require_staff_roles(
+    [StaffRole.LAB_OPERATOR],
+    strict_unauthenticated=False,
+)
+_require_lab_or_doctor_role = require_staff_roles(
+    [StaffRole.LAB_OPERATOR, StaffRole.DOCTOR],
+    strict_unauthenticated=False,
+)
+
+
+_require_any_staff_role = require_staff_roles(
+    [StaffRole.DOCTOR, StaffRole.LAB_OPERATOR, StaffRole.MAINTENANCE_STAFF, StaffRole.ADMIN],
+    strict_unauthenticated=False,
+)
 
 
 def _to_lab_order_read(order) -> LabOrderRead:
@@ -34,13 +50,14 @@ def _to_lab_order_read(order) -> LabOrderRead:
     )
 
 
-@router.get("", response_model=List[LabOrderRead], summary="List lab orders (public metadata without verification codes)")
+@router.get("", response_model=List[LabOrderRead], summary="List lab orders (staff queue without verification codes)")
 def list_lab_orders(
     status: Optional[str] = Query(None, description="Workflow status filter"),
     department_id: Optional[str] = Query(None, description="Ordering department ID"),
     db: Session = Depends(get_db),
+    _claims=Depends(_require_any_staff_role),
 ):
-    """Retrieve lab orders metadata (no clinical results and no verification codes)."""
+    """Retrieve lab orders metadata for authorized hospital staff (no clinical results and no verification codes)."""
     orders = lab_service.get_lab_orders(
         db=db,
         workflow_status=status,
@@ -58,9 +75,11 @@ def list_lab_orders(
 def create_lab_order_endpoint(
     payload: LabOrderCreate,
     db: Session = Depends(get_db),
+    _claims=Depends(_require_lab_or_doctor_role),
 ):
     """
     Creates a synthetic lab order and generates a unique six-digit verification code.
+    Protected by LAB_OPERATOR / DOCTOR role authorization.
     The verification code is excluded from public lab-order responses and accessible via the
     synthetic demo patient portal endpoint (`/api/v1/lab-orders/demo/patient-portal/{patient_reference}`).
     """
@@ -129,13 +148,19 @@ def update_status(
     order_id: str,
     payload: LabOrderStatusUpdate,
     db: Session = Depends(get_db),
+    claims=Depends(_require_lab_operator_role),
 ):
-    """Update lab order workflow stage."""
+    """
+    Update lab order workflow stage.
+    Protected by LAB_OPERATOR role authorization.
+    """
+    actor = (claims.get("display_name") if claims else None) or "LAB_COORDINATOR"
     order = lab_service.update_lab_order_status(
         db=db,
         order_id=order_id,
         workflow_status=payload.workflow_status,
         delay_reason=payload.delay_reason,
-        actor_reference="LAB_COORDINATOR",
+        actor_reference=actor,
     )
     return _to_lab_order_read(order)
+

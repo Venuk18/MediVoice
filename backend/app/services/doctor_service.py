@@ -1,11 +1,15 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import uuid
 from typing import Optional, List, Dict, Any
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select, and_, or_
+from app.models.audit_event import AuditEvent
 from app.models.hospital import Hospital
 from app.models.department import Department
 from app.models.doctor import Doctor
 from app.models.appointment_slot import AppointmentSlot
+from app.schemas.doctor import DoctorManageCreate, DoctorSlotCreateRequest
 
 
 def get_hospitals(db: Session, is_active: Optional[bool] = True) -> List[Hospital]:
@@ -61,6 +65,138 @@ def get_doctor_by_id(db: Session, doctor_id: str) -> Optional[Doctor]:
     return db.scalars(query).first()
 
 
+def create_doctor_with_slots(
+    db: Session,
+    payload: DoctorManageCreate,
+    actor_reference: str = "MAINTENANCE_ADMIN",
+) -> Doctor:
+    """Create a new active synthetic doctor and seed initial available appointment slots."""
+    dept: Optional[Department] = None
+    if payload.department_id:
+        dept = db.scalars(
+            select(Department).where(Department.id == payload.department_id)
+        ).first()
+    if not dept and payload.department_name:
+        dept = db.scalars(
+            select(Department).where(Department.name.ilike(f"%{payload.department_name.strip()}%"))
+        ).first()
+    if not dept:
+        dept = db.scalars(select(Department)).first()
+    if not dept:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No hospital department found to assign the new doctor.",
+        )
+
+    doc_id = str(uuid.uuid4())
+    new_doc = Doctor(
+        id=doc_id,
+        hospital_id=dept.hospital_id,
+        department_id=dept.id,
+        display_name=payload.display_name.strip(),
+        specialty=payload.specialty.strip(),
+        is_active=True,
+    )
+    db.add(new_doc)
+    db.flush()
+
+    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0, tzinfo=None)
+    for day_offset in (1, 2, 3):
+        for hour_val in (10, 15):
+            slot_start = (now_utc + timedelta(days=day_offset)).replace(hour=hour_val)
+            slot_end = slot_start + timedelta(minutes=30)
+            db.add(
+                AppointmentSlot(
+                    id=str(uuid.uuid4()),
+                    doctor_id=new_doc.id,
+                    start_time=slot_start,
+                    end_time=slot_end,
+                    status="AVAILABLE",
+                )
+            )
+
+    db.add(
+        AuditEvent(
+            actor_reference=actor_reference,
+            action="DOCTOR_CREATED",
+            entity_type="Doctor",
+            entity_id=new_doc.id,
+            details=f"Added physician {new_doc.display_name} ({new_doc.specialty}) in {dept.name} with 6 available slots.",
+        )
+    )
+    db.commit()
+    return get_doctor_by_id(db, new_doc.id) or new_doc
+
+
+def deactivate_doctor(
+    db: Session,
+    doctor_id: str,
+    actor_reference: str = "MAINTENANCE_ADMIN",
+) -> Doctor:
+    """Deactivate (remove from active directory) a doctor record and log an audit event."""
+    doc = get_doctor_by_id(db, doctor_id)
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Doctor with ID '{doctor_id}' not found.",
+        )
+    doc.is_active = False
+    db.add(
+        AuditEvent(
+            actor_reference=actor_reference,
+            action="DOCTOR_REMOVED",
+            entity_type="Doctor",
+            entity_id=doc.id,
+            details=f"Removed physician {doc.display_name} ({doc.specialty}) from active directory.",
+        )
+    )
+    db.commit()
+    db.refresh(doc)
+    return doc
+
+
+def create_doctor_slot(
+    db: Session,
+    doctor_id: str,
+    payload: DoctorSlotCreateRequest,
+    actor_reference: str = "DOCTOR_PORTAL",
+) -> AppointmentSlot:
+    """Create a new available appointment slot for a doctor."""
+    doc = get_doctor_by_id(db, doctor_id)
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Doctor with ID '{doctor_id}' not found.",
+        )
+    start_naive = payload.start_time.replace(tzinfo=None)
+    end_naive = payload.end_time.replace(tzinfo=None)
+    if end_naive <= start_naive:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Slot end_time must be after start_time.",
+        )
+    slot = AppointmentSlot(
+        id=str(uuid.uuid4()),
+        doctor_id=doc.id,
+        start_time=start_naive,
+        end_time=end_naive,
+        status="AVAILABLE",
+    )
+    db.add(slot)
+    db.add(
+        AuditEvent(
+            actor_reference=actor_reference,
+            action="DOCTOR_SLOT_CREATED",
+            entity_type="AppointmentSlot",
+            entity_id=slot.id,
+            details=f"Published availability slot for {doc.display_name}: {start_naive.isoformat()} to {end_naive.isoformat()}.",
+        )
+    )
+    db.commit()
+    db.refresh(slot)
+    return slot
+
+
 def get_available_slots(
     db: Session,
     doctor_id: str,
@@ -80,6 +216,7 @@ def get_available_slots(
 
     query = query.order_by(AppointmentSlot.start_time.asc())
     return list(db.scalars(query).all())
+
 
 
 # ==============================================================================

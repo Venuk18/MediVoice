@@ -1,109 +1,62 @@
-# MediVoice AI — Voice-First Hospital Operations Platform
+# MediVoice AI — Aarogya One Hospital Operations Platform
 
-**Hospital:** Aarogya One Hospital (fictional multispecialty hospital in Bengaluru)  
-**Challenge:** Great Indian AI Internship Challenge  
-**Status:** Phase 1 backend foundation, Phase 2 text-first AI agent, and Real Gemini API Multilingual Integration (`te`, `ta`, `kn`, `hi`, `en`) implemented and verified. The backend test suite passes **54/54 tests**.
+**One conversational entry point. Multiple hospital workflows. Controlled, connected operations.**
 
-MediVoice AI is a hospital operations assistant designed to streamline doctor discovery, appointment scheduling, lab order tracking, and operational workflows. It supports both live Gemini API reasoning (`GeminiReasoningAdapter`) and deterministic offline reasoning (`MockReasoningAdapter`) for automated tests without consuming external API credits.
+MediVoice AI is a multilingual conversational assistant (`en`, `te`, `hi`, `ta`, `kn`) integrated with real hospital operational workflows for **Aarogya One Hospital** (a fictional demonstration environment using synthetic data).
 
-## Phase 1: Backend Foundation
+---
 
-### Architecture
+## Repository Structure
 
-- **FastAPI:** REST API and OpenAPI documentation.
-- **SQLAlchemy 2.x:** Database models supporting PostgreSQL and SQLite.
-- **Pydantic v2:** Request validation and structured responses.
-- **Alembic:** Database migrations.
-- **Pytest:** Automated backend tests.
-
-### Key capabilities
-
-- Eight database models covering hospitals, departments, doctors, appointment slots, appointments, lab orders, workflow exceptions, and audit events.
-- Transactional appointment booking and database constraints to prevent double booking.
-- Doctor and appointment-slot discovery with multilingual alias resolution.
-- Appointment cancellation and completion.
-- Lab order status tracking.
-- Deterministic detection and management of overdue lab workflows.
-- Synthetic demo data for Aarogya One Hospital.
-
-## Phase 2+: Multilingual Gemini Agent (`te`, `ta`, `kn`, `hi`, `en`)
-
-### Agent components
-
-- **Conversation manager:** Maintains multi-turn conversation state, active patient language (`en`, `te`, `ta`, `kn`, `hi`), and prompts for missing appointment details.
-- **Reasoning adapters:**
-  - `GeminiReasoningAdapter`: Official Gemini API (`generateContent` with `functionDeclarations`) using `gemini-3.6-flash` (with automatic fallback to `gemini-3.8-flash` / `gemma-4-26b-a4b-it`), bounded request timeouts, bounded `max_tool_rounds`, and backend-only `GEMINI_API_KEY`.
-  - `MockReasoningAdapter`: Deterministic offline reasoning adapter supporting all five languages for zero-credit automated tests.
-- **Restricted tool router:** Allows only approved `search_doctors`, `get_available_slots`, and `book_appointment` tools. Blocks direct SQL or unapproved tools.
-- **Confirmation gate:** Requires explicit patient confirmation (`YES`, `అవును`, `ஆம்`, `ಹೌದು`, `हाँ`) of the pending booking draft before executing `book_appointment`. Any change to doctor, slot, reason, or patient reference invalidates prior confirmation via SHA-256 draft fingerprinting.
-- **Booking verification:** Uses the transactional service and reports success only after the database commit succeeds.
-- **Session isolation:** Keeps conversation drafts and patient references isolated between sessions.
-
-### Agent API endpoints
-
-| Method | Endpoint | Purpose |
-|---|---|---|
-| POST | `/api/v1/agent/chat` | Send a message to the agent (English, Telugu, Tamil, Kannada, Hindi) |
-| GET | `/api/v1/agent/sessions/{session_id}` | Inspect conversation state |
-| POST | `/api/v1/agent/sessions/{session_id}/reset` | Reset a conversation session |
-| GET | `/api/v1/agent/config` | Inspect active reasoning provider, model, and supported languages (never exposes API key) |
-
-## Setup & Configuration
-
-### 1. Install dependencies
-
-```powershell
-py -m pip install -r backend/requirements.txt
-npm install
+```text
+MediVoice-AI/
+├── backend/                 # FastAPI + SQLAlchemy 2.x + Pydantic v2 backend
+│   ├── alembic/             # Database migrations
+│   ├── app/
+│   │   ├── agent/           # Multilingual AI agent, adapters, session state & tool router
+│   │   ├── api/v1/          # REST API endpoints (auth, doctors, appointments, lab-orders, insurance, maintenance, workflow)
+│   │   ├── core/            # Security, RBAC & configuration
+│   │   ├── db/              # Database engine & session management
+│   │   ├── models/          # SQLAlchemy ORM models
+│   │   ├── schemas/         # Pydantic request/response schemas
+│   │   └── services/        # Validated domain business logic
+│   ├── scripts/             # Idempotent synthetic data seeding (seed_data.py)
+│   └── tests/               # Comprehensive pytest test suite
+├── frontend/                # Modular React + TypeScript + Tailwind CSS frontend
+│   ├── src/
+│   │   ├── app/             # Application shell & shared PlatformContext
+│   │   ├── components/      # TopNav (3-zone contract) & StaffAuthGate
+│   │   ├── features/
+│   │   │   ├── patient/     # Dark Midnight Navy (#0B1020) Patient Hospital Website
+│   │   │   ├── chatbot/     # Embedded & Full-Screen MediVoice AI Conversational Experience
+│   │   │   ├── doctor/      # Light Operational Doctor Workspace (/doctor/*)
+│   │   │   ├── laboratory/  # Light Operational Laboratory Operator Workspace (/lab/*)
+│   │   │   └── maintenance/ # Light Operational Maintenance & Admin Workspace (/maintenance/*)
+│   │   ├── services/        # Centralized typed API client (medivoiceApi)
+│   │   ├── hooks/           # Multi-page route & workspace state hook
+│   │   └── types/           # Complete TypeScript API & domain interfaces
+│   ├── package.json
+│   └── vite.config.ts
+└── README.md
 ```
 
-### 2. Configure `.env`
+---
 
-Copy `.env.example` to `.env` and set your backend environment variables:
+## Four Connected Hospital Experiences
 
-```ini
-DATABASE_URL=sqlite:///./aarogya_demo.db
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-3.6-flash
-GEMINI_TIMEOUT_SECONDS=15.0
-GEMINI_MAX_TOOL_ROUNDS=4
-```
-
-### 3. Run backend tests (uses `MockReasoningAdapter`, consumes zero API credits)
-
-```powershell
-$env:PYTHONPATH="backend"; py -m pytest backend/tests/ -v
-```
-
-### 4. Run frontend checks
-
-```powershell
-npm run lint
-npm run build
-```
-
-### 5. Seed synthetic data and start the backend
-
-```powershell
-$env:PYTHONPATH="backend"
-$env:DATABASE_URL="sqlite:///./aarogya_demo.db"
-$env:LLM_PROVIDER="gemini"
-$env:GEMINI_API_KEY="your_gemini_api_key_here"
-$env:GEMINI_MODEL="gemini-3.6-flash"
-py backend/scripts/seed_data.py
-py -m uvicorn app.main:app --app-dir backend --port 8000 --reload
-```
-
-### 6. Start the frontend
-
-Open another terminal at the project root:
-
-```powershell
-npm run dev
-```
-
-## Project Safety
-
-MediVoice AI is an educational prototype using strictly synthetic data. It must not be used as a substitute for clinical judgment or with real patient data.
-
+1. **Patient Hospital Website & MediVoice AI Chatbot (`/`, `/doctors`, `/appointments`, `/lab-status`, `/insurance`, `/support`, `/medivoice`)**
+   - Expressive dark visual identity (`#0B1020` midnight navy, `#111B2E` deep navy panel, `#2DD4BF` teal, `#38BDF8` electric cyan).
+   - Hospital overview, clinical wings, specialist directory, two-step explicit appointment confirmation, 6-digit laboratory status verification, document-grounded insurance search, and human-support ticket escalation.
+   - Dedicated embedded and full-screen **MediVoice AI** conversational experience in English, Telugu, Hindi, Tamil, and Kannada.
+2. **Doctor Workspace (`/doctor`, `/doctor/appointments`, `/doctor/calendar`, `/doctor/availability`, `/doctor/profile`)**
+   - Refined low-glare light operational theme protected by `DOCTOR` / `ADMIN` role.
+   - Daily schedule, consultation completion, follow-up recommendation persistence, and live open slot publishing (`POST /api/v1/doctors/{id}/slots`).
+3. **Laboratory Operator Workspace (`/lab`, `/lab/orders`)**
+   - Protected by `LAB_OPERATOR` / `ADMIN` role.
+   - Diagnostic sample queue, canonical status transitions (`REGISTERED` → `SAMPLE_COLLECTED` → `PROCESSING` → `COMPLETED` / `CANCELLED`), new synthetic order registration, and deterministic overdue SLA escalation.
+4. **Hospital Maintenance & Operations Workspace (`/maintenance`, `/maintenance/work-orders`, `/maintenance/new-request`, `/maintenance/doctors`, `/maintenance/insurance`, `/maintenance/tickets`)**
+   - Protected by `MAINTENANCE_STAFF` / `ADMIN` role.
+   - Facilities & biomedical work-order management enforcing `OPEN → ASSIGNED → IN_PROGRESS → RESOLVED`.
+   - **Manage Doctors**: Add new doctors with automatic slot seeding (`POST /api/v1/doctors`) or remove doctors (`DELETE /api/v1/doctors/{id}`).
+   - **Manage Insurances**: Add new insurance providers & plans (`POST /api/v1/insurance/providers`) or remove providers (`DELETE /api/v1/insurance/providers/{id}`).
+   - **Conflicts & Human-Support Tickets**: Assign and resolve overdue SLA workflow conflicts and escalated patient insurance inquiries.

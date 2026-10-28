@@ -1,16 +1,22 @@
+from datetime import datetime, timezone
+import json
 from typing import List, Optional, Dict, Any
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.models.audit_event import AuditEvent
 from app.models.insurance import InsuranceProvider, InsurancePlan
+from app.models.workflow_exception import WorkflowException
 from app.schemas.insurance import (
     INSURANCE_COVERAGE_DISCLAIMER,
     InsuranceDeskContactRead,
     InsurancePlanRead,
     InsuranceProviderRead,
     InsuranceSearchResponse,
+    InsuranceSupportTicketCreate,
+    InsuranceSupportTicketRead,
 )
 
 
@@ -262,3 +268,201 @@ def search_hospital_insurance_tool(
         "is_synthetic_demo": True,
         "disclaimer": res.disclaimer,
     }
+
+
+def create_insurance_support_ticket(
+    db: Session,
+    payload: InsuranceSupportTicketCreate,
+) -> InsuranceSupportTicketRead:
+    """
+    Creates a real persisted human-support ticket via the WorkflowException & AuditEvent
+    workflow when a patient's policy-specific question cannot be answered from synthetic
+    plan documents.
+    """
+    pat_ref = (payload.patient_reference or "PAT-2026-4409").strip()
+    prov = payload.provider_name.strip() if payload.provider_name else None
+    plan = payload.plan_name.strip() if payload.plan_name else None
+    question = payload.question.strip()
+
+    context_label = f"{prov} ({plan})" if prov and plan else (prov or plan or "Unlisted / Policy Verification")
+    title = f"Insurance Desk Escalation: {context_label} ({pat_ref})"
+    description = (
+        f"Patient Reference: {pat_ref}\n"
+        f"Provider / Plan: {context_label}\n"
+        f"Preferred Follow-Up: {payload.contact_preference or 'Hospital Insurance Desk'}\n"
+        f"Patient Question: {question}"
+    )
+
+    try:
+        now_utc = datetime.now(timezone.utc)
+        exc = WorkflowException(
+            exception_type="INSURANCE_SUPPORT_TICKET",
+            title=title[:255],
+            description=description,
+            priority="MEDIUM",
+            responsible_department="Insurance & TPA Helpdesk",
+            assigned_to="TPA Verification Coordinator",
+            status="OPEN",
+            affected_record_type="InsuranceInquiry",
+            affected_record_id=pat_ref,
+            detected_at=now_utc,
+        )
+        db.add(exc)
+        db.flush()
+
+        audit = AuditEvent(
+            actor_reference=pat_ref,
+            action="INSURANCE_SUPPORT_TICKET_CREATED",
+            entity_type="WorkflowException",
+            entity_id=exc.id,
+            details=json.dumps(
+                {
+                    "patient_reference": pat_ref,
+                    "provider_name": prov,
+                    "plan_name": plan,
+                    "question": question,
+                }
+            ),
+        )
+        db.add(audit)
+        db.commit()
+        db.refresh(exc)
+
+        return InsuranceSupportTicketRead(
+            ticket_id=exc.id,
+            patient_reference=pat_ref,
+            provider_name=prov,
+            plan_name=plan,
+            question=question,
+            status=exc.status,
+            priority=exc.priority,
+            assigned_department=exc.responsible_department,
+            created_at=exc.detected_at or now_utc,
+            disclaimer=INSURANCE_COVERAGE_DISCLAIMER,
+        )
+    except SQLAlchemyError as exc_err:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database error while creating insurance support ticket.",
+        ) from exc_err
+
+
+def list_insurance_support_tickets(
+    db: Session,
+    patient_reference: Optional[str] = None,
+) -> List[InsuranceSupportTicketRead]:
+    stmt = select(WorkflowException).where(
+        WorkflowException.exception_type == "INSURANCE_SUPPORT_TICKET"
+    )
+    if patient_reference and patient_reference.strip():
+        stmt = stmt.where(
+            WorkflowException.affected_record_id == patient_reference.strip()
+        )
+    stmt = stmt.order_by(WorkflowException.detected_at.desc())
+    rows = list(db.scalars(stmt).all())
+    results: List[InsuranceSupportTicketRead] = []
+    for r in rows:
+        results.append(
+            InsuranceSupportTicketRead(
+                ticket_id=r.id,
+                patient_reference=r.affected_record_id,
+                provider_name=None,
+                plan_name=None,
+                question=r.description,
+                status=r.status,
+                priority=r.priority,
+                assigned_department=r.responsible_department,
+                created_at=r.detected_at,
+                disclaimer=INSURANCE_COVERAGE_DISCLAIMER,
+            )
+        )
+    return results
+
+
+def create_insurance_provider_with_plan(
+    db: Session,
+    payload: Any,
+    actor_reference: str = "MAINTENANCE_ADMIN",
+) -> InsuranceProviderRead:
+    """Create a new synthetic insurance provider and initial plan."""
+    import uuid
+    from app.models.hospital import Hospital
+
+    hosp = db.scalars(select(Hospital)).first()
+    hospital_id = hosp.id if hosp else payload.hospital_id
+
+    prov_id = str(uuid.uuid4())
+    provider = InsuranceProvider(
+        id=prov_id,
+        hospital_id=hospital_id,
+        name=payload.name.strip(),
+        code=payload.code.strip().upper(),
+        support_contact=payload.support_contact.strip(),
+        desk_location=payload.desk_location.strip(),
+        contact_hours=payload.contact_hours.strip(),
+        is_active=True,
+        is_synthetic_demo=True,
+    )
+    db.add(provider)
+    db.flush()
+
+    plan = InsurancePlan(
+        id=str(uuid.uuid4()),
+        provider_id=provider.id,
+        plan_name=payload.plan_name.strip(),
+        plan_type=payload.plan_type.strip(),
+        coverage_summary=payload.coverage_summary.strip(),
+        covered_services=payload.covered_services.strip(),
+        copay_summary=payload.copay_summary.strip(),
+        preauthorization_required=payload.preauthorization_required,
+        cashless_available=payload.cashless_available,
+        reimbursement_available=payload.reimbursement_available,
+        is_active=True,
+    )
+    db.add(plan)
+    db.add(
+        AuditEvent(
+            actor_reference=actor_reference,
+            action="INSURANCE_PROVIDER_CREATED",
+            entity_type="InsuranceProvider",
+            entity_id=provider.id,
+            details=f"Added synthetic insurance provider {provider.name} ({provider.code}) with plan {plan.plan_name}.",
+        )
+    )
+    db.commit()
+    return get_provider_with_active_plans(db, provider.id)
+
+
+def deactivate_insurance_provider(
+    db: Session,
+    provider_id: str,
+    actor_reference: str = "MAINTENANCE_ADMIN",
+) -> Dict[str, Any]:
+    """Deactivate an insurance provider and its associated plans."""
+    provider = db.scalars(
+        select(InsuranceProvider)
+        .options(joinedload(InsuranceProvider.plans))
+        .where(InsuranceProvider.id == provider_id)
+    ).unique().first()
+    if not provider:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Insurance provider '{provider_id}' not found.",
+        )
+    provider.is_active = False
+    for pl in provider.plans or []:
+        pl.is_active = False
+    db.add(
+        AuditEvent(
+            actor_reference=actor_reference,
+            action="INSURANCE_PROVIDER_REMOVED",
+            entity_type="InsuranceProvider",
+            entity_id=provider.id,
+            details=f"Deactivated insurance provider {provider.name} ({provider.code}).",
+        )
+    )
+    db.commit()
+    return {"id": provider.id, "name": provider.name, "is_active": False}
+
+

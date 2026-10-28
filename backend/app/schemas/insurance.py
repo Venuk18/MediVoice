@@ -91,3 +91,68 @@ class InsuranceSearchResponse(BaseModel):
     insurance_desk: InsuranceDeskContactRead = Field(default_factory=InsuranceDeskContactRead)
     is_synthetic_demo: bool = True
     disclaimer: str = INSURANCE_COVERAGE_DISCLAIMER
+
+
+class InsuranceSupportTicketCreate(BaseModel):
+    patient_reference: str = Field(
+        default="PAT-2026-4409",
+        min_length=2,
+        max_length=100,
+        description="Synthetic patient reference ID",
+    )
+    provider_name: Optional[str] = Field(
+        default=None, max_length=150, description="Insurance provider name if known"
+    )
+    plan_name: Optional[str] = Field(
+        default=None, max_length=150, description="Insurance plan name if known"
+    )
+    question: str = Field(
+        ...,
+        min_length=5,
+        max_length=2000,
+        description="Specific policy or coverage inquiry requiring human TPA desk review",
+    )
+    contact_preference: Optional[str] = Field(
+        default="In-Hospital Insurance Desk Counter 3",
+        max_length=150,
+    )
+
+
+class InsuranceSupportTicketRead(BaseModel):
+    ticket_id: str
+    patient_reference: str
+    provider_name: Optional[str] = None
+    plan_name: Optional[str] = None
+    question: str
+    status: str
+    priority: str
+    assigned_department: str
+    created_at: datetime
+    disclaimer: str = INSURANCE_COVERAGE_DISCLAIMER
+
+
+class InsuranceProviderManageCreate(BaseModel):
+    hospital_id: str = Field(default="11111111-1111-1111-1111-111111111111")
+    name: str = Field(..., min_length=3, max_length=150)
+    code: str = Field(..., min_length=2, max_length=50)
+    support_contact: str = Field(default="1800-100-4299 (TPA Desk)", max_length=150)
+    desk_location: str = Field(
+        default="Ground Floor, Block A — Aarogya One Hospital", max_length=200
+    )
+    contact_hours: str = Field(
+        default="08:00 AM - 08:00 PM IST (24/7 Emergency TPA Support)", max_length=150
+    )
+    plan_name: str = Field(..., min_length=3, max_length=150)
+    plan_type: str = Field(default="Family Floater & Cashless", max_length=100)
+    coverage_summary: str = Field(
+        default="Covers inpatient hospitalization, day-care procedures, and diagnostic workups subject to policy terms."
+    )
+    covered_services: str = Field(
+        default="Cardiology, Neurology, Orthopedics, Pediatrics, General Medicine, Diagnostics"
+    )
+    copay_summary: str = Field(default="10% standard co-pay; pre-authorization required.")
+    preauthorization_required: bool = True
+    cashless_available: bool = True
+    reimbursement_available: bool = True
+
+

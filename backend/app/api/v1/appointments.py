@@ -3,6 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.security import StaffRole, require_staff_roles
 from app.db.session import get_db
 from app.schemas.appointment import (
     AppointmentCreate,
@@ -14,6 +15,11 @@ from app.schemas.appointment import (
 from app.services import appointment_service
 
 router = APIRouter(prefix="/appointments", tags=["Appointments"])
+
+_require_doctor_role = require_staff_roles(
+    [StaffRole.DOCTOR],
+    strict_unauthenticated=False,
+)
 
 
 def _to_appointment_read(appt) -> AppointmentRead:
@@ -124,17 +130,20 @@ def complete_appointment_endpoint(
     appointment_id: str,
     payload: Optional[AppointmentCompleteRequest] = None,
     db: Session = Depends(get_db),
+    claims=Depends(_require_doctor_role),
 ):
     """
     Marks operational visit as completed.
+    Protected by DOCTOR role authorization.
     Clinical notes are excluded; only operational completion status is recorded.
     """
     notes = payload.notes if payload else "Visit concluded"
+    actor = (claims.get("display_name") if claims else None) or "DOCTOR_DASHBOARD"
     appt = appointment_service.complete_appointment(
         db=db,
         appointment_id=appointment_id,
         operational_notes=notes,
-        actor_reference="DOCTOR_DASHBOARD",
+        actor_reference=actor,
     )
     return _to_appointment_read(appt)
 
@@ -144,16 +153,20 @@ def record_follow_up_endpoint(
     appointment_id: str,
     payload: AppointmentFollowUpRequest,
     db: Session = Depends(get_db),
+    claims=Depends(_require_doctor_role),
 ):
     """
     Records doctor-recommended follow-up date and operational instructions.
+    Protected by DOCTOR role authorization.
     Does NOT automatically create or book a subsequent appointment.
     """
+    actor = (claims.get("display_name") if claims else None) or "DOCTOR_DASHBOARD"
     appt = appointment_service.record_follow_up(
         db=db,
         appointment_id=appointment_id,
         follow_up_date=payload.follow_up_date,
         follow_up_notes=payload.follow_up_notes,
-        actor_reference="DOCTOR_DASHBOARD",
+        actor_reference=actor,
     )
     return _to_appointment_read(appt)
+

@@ -1,10 +1,16 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.security import StaffRole, require_staff_roles
 from app.db.session import get_db
-from app.schemas.doctor import DoctorRead, AppointmentSlotRead
+from app.schemas.doctor import (
+    AppointmentSlotRead,
+    DoctorManageCreate,
+    DoctorRead,
+    DoctorSlotCreateRequest,
+)
 from app.services import doctor_service
 
 router = APIRouter(prefix="/doctors", tags=["Doctors"])
@@ -26,7 +32,6 @@ def list_doctors(
         department_name=department_name,
         hospital_id=hospital_id,
     )
-    # Enrich department_name and hospital_name for response
     results = []
     for doc in doctors:
         doc_read = DoctorRead(
@@ -42,6 +47,63 @@ def list_doctors(
         )
         results.append(doc_read)
     return results
+
+
+@router.post(
+    "",
+    response_model=DoctorRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Add a new doctor to the hospital directory",
+)
+def create_doctor(
+    payload: DoctorManageCreate,
+    db: Session = Depends(get_db),
+    staff: Optional[Dict[str, Optional[str]]] = Depends(
+        require_staff_roles([StaffRole.MAINTENANCE_STAFF, StaffRole.ADMIN])
+    ),
+):
+    """Create a new active physician record and seed initial appointment slots."""
+    actor = f"{staff.get('username')}:{staff.get('role')}" if staff else "MAINTENANCE_ADMIN"
+    doc = doctor_service.create_doctor_with_slots(db=db, payload=payload, actor_reference=actor)
+    return DoctorRead(
+        id=doc.id,
+        hospital_id=doc.hospital_id,
+        department_id=doc.department_id,
+        display_name=doc.display_name,
+        specialty=doc.specialty,
+        is_active=doc.is_active,
+        created_at=doc.created_at,
+        department_name=doc.department.name if doc.department else None,
+        hospital_name=doc.hospital.name if doc.hospital else None,
+    )
+
+
+@router.delete(
+    "/{doctor_id}",
+    response_model=DoctorRead,
+    summary="Remove (deactivate) a doctor from the active directory",
+)
+def remove_doctor(
+    doctor_id: str,
+    db: Session = Depends(get_db),
+    staff: Optional[Dict[str, Optional[str]]] = Depends(
+        require_staff_roles([StaffRole.MAINTENANCE_STAFF, StaffRole.ADMIN])
+    ),
+):
+    """Deactivates a physician from the active hospital roster."""
+    actor = f"{staff.get('username')}:{staff.get('role')}" if staff else "MAINTENANCE_ADMIN"
+    doc = doctor_service.deactivate_doctor(db=db, doctor_id=doctor_id, actor_reference=actor)
+    return DoctorRead(
+        id=doc.id,
+        hospital_id=doc.hospital_id,
+        department_id=doc.department_id,
+        display_name=doc.display_name,
+        specialty=doc.specialty,
+        is_active=doc.is_active,
+        created_at=doc.created_at,
+        department_name=doc.department.name if doc.department else None,
+        hospital_name=doc.hospital.name if doc.hospital else None,
+    )
 
 
 @router.get("/{doctor_id}", response_model=DoctorRead, summary="Get doctor details")
@@ -86,7 +148,6 @@ def get_doctor_slots(
             detail=f"Doctor with ID '{doctor_id}' not found.",
         )
 
-    # Use AI tool ready helper for flexible date/time filtering
     if date or time_range:
         tool_slots = doctor_service.get_available_slots_tool(
             db=db,
@@ -94,7 +155,6 @@ def get_doctor_slots(
             requested_date=date,
             time_range=time_range,
         )
-        # Fetch the actual slots to map cleanly
         slot_ids = [s["slot_id"] for s in tool_slots]
         all_slots = doctor_service.get_available_slots(db, doctor_id=doctor_id)
         return [s for s in all_slots if s.id in slot_ids]
@@ -105,3 +165,29 @@ def get_doctor_slots(
         start_date=start_date,
         end_date=end_date,
     )
+
+
+@router.post(
+    "/{doctor_id}/slots",
+    response_model=AppointmentSlotRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new available appointment slot for a doctor",
+)
+def add_doctor_slot(
+    doctor_id: str,
+    payload: DoctorSlotCreateRequest,
+    db: Session = Depends(get_db),
+    staff: Optional[Dict[str, Optional[str]]] = Depends(
+        require_staff_roles([StaffRole.DOCTOR, StaffRole.MAINTENANCE_STAFF, StaffRole.ADMIN])
+    ),
+):
+    """Add an open appointment slot for a specific physician."""
+    actor = f"{staff.get('username')}:{staff.get('role')}" if staff else "DOCTOR_PORTAL"
+    return doctor_service.create_doctor_slot(
+        db=db,
+        doctor_id=doctor_id,
+        payload=payload,
+        actor_reference=actor,
+    )
+
+

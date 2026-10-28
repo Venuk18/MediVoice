@@ -7,6 +7,12 @@ from app.models.lab_order import LabOrder, LabStatus
 from app.models.insurance import InsuranceProvider, InsurancePlan
 from app.models.workflow_exception import WorkflowException
 from app.models.audit_event import AuditEvent
+from app.models.maintenance import (
+    MaintenanceWorkOrder,
+    MaintenanceStatus,
+    MaintenancePriority,
+    MaintenanceCategory,
+)
 
 __all__ = [
     "Hospital",
@@ -20,4 +26,9 @@ __all__ = [
     "InsurancePlan",
     "WorkflowException",
     "AuditEvent",
+    "MaintenanceWorkOrder",
+    "MaintenanceStatus",
+    "MaintenancePriority",
+    "MaintenanceCategory",
 ]
+

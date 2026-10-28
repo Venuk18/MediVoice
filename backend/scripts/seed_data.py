@@ -32,6 +32,8 @@ from app.models.lab_order import LabOrder
 from app.models.insurance import InsuranceProvider, InsurancePlan
 from app.models.workflow_exception import WorkflowException
 from app.models.audit_event import AuditEvent
+from app.models.maintenance import MaintenanceWorkOrder
+
 
 
 def seed_database(db: Session, reset: bool = False):
@@ -545,8 +547,100 @@ def seed_database(db: Session, reset: bool = False):
         )
         db.add(existing_audit)
 
+    # 9. Synthetic Hospital Maintenance Work Orders
+    maintenance_defs = [
+        {
+            "id": "aaaaaaaa-0001-0000-0000-000000000001",
+            "work_order_code": "MWO-2026-1041",
+            "title": "Negative-Pressure HEPA Damper Drift — ICU Isolation Bay 3",
+            "description": "Differential pressure sensor reading -1.4 Pa (target -2.5 Pa minimum). Immediate damper actuator calibration required.",
+            "category": "HVAC & Environmental",
+            "location": "Block A • 3rd Floor • Cardiac & Medical ICU Bay 3",
+            "equipment_reference": "HVAC-AHU-304B",
+            "priority": "CRITICAL",
+            "status": "IN_PROGRESS",
+            "reported_by": "ICU Charge Nurse Desk",
+            "assigned_to": "Karthik Subramanian (Biomedical & HVAC Lead)",
+            "resolution_notes": "Actuator linkage inspected; replacing differential pressure transducer module.",
+            "resolved_at": None,
+        },
+        {
+            "id": "aaaaaaaa-0002-0000-0000-000000000002",
+            "work_order_code": "MWO-2026-1042",
+            "title": "Automated Chemiluminescence Analyzer Optical Sensor Cleaning",
+            "description": "Routine optical path warning triggered during stat cardiac enzyme batch run.",
+            "category": "Biomedical Equipment",
+            "location": "Block B • Ground Floor • Central Diagnostics Lab",
+            "equipment_reference": "BIO-CHEM-8820",
+            "priority": "HIGH",
+            "status": "ASSIGNED",
+            "reported_by": "Vikram Deshmukh (Central Diagnostics)",
+            "assigned_to": "Rohan Kulkarni (Biomedical Engineering)",
+            "resolution_notes": None,
+            "resolved_at": None,
+        },
+        {
+            "id": "aaaaaaaa-0003-0000-0000-000000000003",
+            "work_order_code": "MWO-2026-1043",
+            "title": "UPS Backup Battery Bank B2 Voltage Imbalance Alert",
+            "description": "Quarterly load test flagged cell #14 voltage drop on secondary UPS line serving Outpatient Wing.",
+            "category": "Electrical & Power",
+            "location": "Basement Level 1 • Electrical Substation Room B2",
+            "equipment_reference": "ELEC-UPS-B2-14",
+            "priority": "MEDIUM",
+            "status": "OPEN",
+            "reported_by": "Facility Telemetry Monitor",
+            "assigned_to": None,
+            "resolution_notes": None,
+            "resolved_at": None,
+        },
+        {
+            "id": "aaaaaaaa-0004-0000-0000-000000000004",
+            "work_order_code": "MWO-2026-1039",
+            "title": "Reverse Osmosis Water Purification Pre-Filter Replacement",
+            "description": "Scheduled 5-micron sediment and carbon block replacement for Diagnostics & Sterilization feed line.",
+            "category": "Sanitation & Plumbing",
+            "location": "Block B • Utility Mezzanine • Water Plant",
+            "equipment_reference": "PLB-RO-210",
+            "priority": "LOW",
+            "status": "RESOLVED",
+            "reported_by": "Central Sterile Supply Department (CSSD)",
+            "assigned_to": "Suresh Babu (Plumbing & Water Systems)",
+            "resolution_notes": "Replaced 5-micron and activated carbon cartridges; post-filtration TDS verified at 12 ppm.",
+            "resolved_at": now_utc - timedelta(hours=5),
+        },
+    ]
+
+    for m_def in maintenance_defs:
+        existing_mwo = db.scalars(
+            select(MaintenanceWorkOrder).where(
+                (MaintenanceWorkOrder.id == m_def["id"])
+                | (MaintenanceWorkOrder.work_order_code == m_def["work_order_code"])
+            )
+        ).first()
+        if not existing_mwo:
+            existing_mwo = MaintenanceWorkOrder(
+                id=m_def["id"],
+                hospital_id=hosp_id,
+                work_order_code=m_def["work_order_code"],
+                title=m_def["title"],
+                description=m_def["description"],
+                category=m_def["category"],
+                location=m_def["location"],
+                equipment_reference=m_def["equipment_reference"],
+                priority=m_def["priority"],
+                status=m_def["status"],
+                reported_by=m_def["reported_by"],
+                assigned_to=m_def["assigned_to"],
+                resolution_notes=m_def["resolution_notes"],
+                resolved_at=m_def["resolved_at"],
+            )
+            db.add(existing_mwo)
+            print(f"  [+] Added Maintenance Work Order: {m_def['work_order_code']} ({m_def['status']})")
+
     db.commit()
     print("Seed data successfully committed!")
+
 
 
 if __name__ == "__main__":
