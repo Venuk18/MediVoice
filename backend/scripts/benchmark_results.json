@@ -1,0 +1,931 @@
+{
+  "gemini_2_5_flash_direct": {
+    "model": "gemini-2.5-flash",
+    "fallback": false,
+    "trials": [
+      {
+        "user_message": "I need to consult a cardiologist for chest pain",
+        "first_response_latency_ms": 1642.401700024493,
+        "total_latency_ms": 1642.401700024493,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u26a0\ufe0f Emergency Guidance: Chest pain or acute breathing/neurological symptoms can be a medical emergency. If your symptoms ",
+        "error": null,
+        "scenario_id": "cardiology_search",
+        "scenario_name": "Cardiology Doctor Search",
+        "trial_num": 1
+      },
+      {
+        "user_message": "I need to consult a cardiologist for chest pain",
+        "first_response_latency_ms": 8897.81250001397,
+        "total_latency_ms": 8897.81250001397,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u26a0\ufe0f Emergency Guidance: Chest pain or acute breathing/neurological symptoms can be a medical emergency. If your symptoms ",
+        "error": null,
+        "scenario_id": "cardiology_search",
+        "scenario_name": "Cardiology Doctor Search",
+        "trial_num": 2
+      },
+      {
+        "user_message": "Anyone is okay, earliest slot please",
+        "first_response_latency_ms": 4868.450599955395,
+        "total_latency_ms": 4868.450599955395,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "The AI reasoning service is temporarily unavailable (Gemini API returned HTTP 404.). Please try again shortly or continu",
+        "error": null,
+        "scenario_id": "flexible_slot",
+        "scenario_name": "'Anyone is okay' Slot Selection",
+        "trial_num": 1
+      },
+      {
+        "user_message": "Anyone is okay, earliest slot please",
+        "first_response_latency_ms": 2318.442099960521,
+        "total_latency_ms": 2318.442099960521,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "The AI reasoning service is temporarily unavailable (Gemini API returned HTTP 404.). Please try again shortly or continu",
+        "error": null,
+        "scenario_id": "flexible_slot",
+        "scenario_name": "'Anyone is okay' Slot Selection",
+        "trial_num": 2
+      },
+      {
+        "user_message": "No, I'm new here",
+        "first_response_latency_ms": 2400.8367999922484,
+        "total_latency_ms": 2400.8367999922484,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": true,
+        "args_correct": true,
+        "context_retained": false,
+        "reply_preview": "The AI reasoning service is temporarily unavailable (Gemini API returned HTTP 404.). Please try again shortly or continu",
+        "error": null,
+        "scenario_id": "contextual_no",
+        "scenario_name": "Contextual 'No' for New Patient",
+        "trial_num": 1
+      },
+      {
+        "user_message": "No, I'm new here",
+        "first_response_latency_ms": 1921.6027999063954,
+        "total_latency_ms": 1921.6027999063954,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": true,
+        "args_correct": true,
+        "context_retained": false,
+        "reply_preview": "The AI reasoning service is temporarily unavailable (Gemini API returned HTTP 404.). Please try again shortly or continu",
+        "error": null,
+        "scenario_id": "contextual_no",
+        "scenario_name": "Contextual 'No' for New Patient",
+        "trial_num": 2
+      },
+      {
+        "user_message": "Do you accept Star Health Insurance?",
+        "first_response_latency_ms": 389.176850032527,
+        "total_latency_ms": 778.353700065054,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_hospital_insurance"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u2139\ufe0f The requested insurance provider ('Star Health') is not currently listed in Aarogya One Hospital's active network rec",
+        "error": null,
+        "scenario_id": "insurance_lookup",
+        "scenario_name": "Insurance Provider Lookup",
+        "trial_num": 1
+      },
+      {
+        "user_message": "Do you accept Star Health Insurance?",
+        "first_response_latency_ms": 10.783799982164055,
+        "total_latency_ms": 21.56759996432811,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_hospital_insurance"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u2139\ufe0f The requested insurance provider ('Star Health') is not currently listed in Aarogya One Hospital's active network rec",
+        "error": null,
+        "scenario_id": "insurance_lookup",
+        "scenario_name": "Insurance Provider Lookup",
+        "trial_num": 2
+      },
+      {
+        "user_message": "Check my lab report with verification code 847291",
+        "first_response_latency_ms": 33.960699976887554,
+        "total_latency_ms": 67.92139995377511,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "check_lab_report_status"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u274c Invalid or expired verification code: We could not verify a lab order with that 6-digit code. Please double-check your",
+        "error": null,
+        "scenario_id": "lab_verification",
+        "scenario_name": "Lab Report Verification",
+        "trial_num": 1
+      },
+      {
+        "user_message": "Check my lab report with verification code 847291",
+        "first_response_latency_ms": 3.362799994647503,
+        "total_latency_ms": 6.725599989295006,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "check_lab_report_status"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u274c Invalid or expired verification code: We could not verify a lab order with that 6-digit code. Please double-check your",
+        "error": null,
+        "scenario_id": "lab_verification",
+        "scenario_name": "Lab Report Verification",
+        "trial_num": 2
+      },
+      {
+        "user_message": "\u0c28\u0c3e\u0c15\u0c41 \u0c17\u0c41\u0c02\u0c21\u0c46 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f\u0c17\u0c3e \u0c09\u0c02\u0c26\u0c3f, \u0c15\u0c3e\u0c30\u0c4d\u0c21\u0c3f\u0c2f\u0c3e\u0c32\u0c1c\u0c3f\u0c38\u0c4d\u0c1f\u0c4d \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3f",
+        "first_response_latency_ms": 3990.397599991411,
+        "total_latency_ms": 3990.397599991411,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u26a0\ufe0f \u0c05\u0c24\u0c4d\u0c2f\u0c35\u0c38\u0c30 \u0c35\u0c48\u0c26\u0c4d\u0c2f \u0c38\u0c42\u0c1a\u0c28 (Emergency Guidance): \u0c1b\u0c3e\u0c24\u0c40 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f \u0c32\u0c47\u0c26\u0c3e \u0c24\u0c40\u0c35\u0c4d\u0c30\u0c2e\u0c48\u0c28 \u0c36\u0c4d\u0c35\u0c3e\u0c38/\u0c28\u0c30\u0c3e\u0c32 \u0c32\u0c15\u0c4d\u0c37\u0c23\u0c3e\u0c32\u0c41 \u0c05\u0c24\u0c4d\u0c2f\u0c35\u0c38\u0c30 \u0c35\u0c48\u0c26\u0c4d\u0c2f \u0c2a\u0c30\u0c3f\u0c38\u0c4d\u0c25\u0c3f\u0c24\u0c3f \u0c15\u0c3e\u0c35\u0c1a\u0c4d\u0c1a",
+        "error": null,
+        "scenario_id": "multilingual_telugu",
+        "scenario_name": "Telugu Specialty Inquiry",
+        "trial_num": 1
+      },
+      {
+        "user_message": "\u0c28\u0c3e\u0c15\u0c41 \u0c17\u0c41\u0c02\u0c21\u0c46 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f\u0c17\u0c3e \u0c09\u0c02\u0c26\u0c3f, \u0c15\u0c3e\u0c30\u0c4d\u0c21\u0c3f\u0c2f\u0c3e\u0c32\u0c1c\u0c3f\u0c38\u0c4d\u0c1f\u0c4d \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3f",
+        "first_response_latency_ms": 10353.02879998926,
+        "total_latency_ms": 10353.02879998926,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u26a0\ufe0f \u0c05\u0c24\u0c4d\u0c2f\u0c35\u0c38\u0c30 \u0c35\u0c48\u0c26\u0c4d\u0c2f \u0c38\u0c42\u0c1a\u0c28 (Emergency Guidance): \u0c1b\u0c3e\u0c24\u0c40 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f \u0c32\u0c47\u0c26\u0c3e \u0c24\u0c40\u0c35\u0c4d\u0c30\u0c2e\u0c48\u0c28 \u0c36\u0c4d\u0c35\u0c3e\u0c38/\u0c28\u0c30\u0c3e\u0c32 \u0c32\u0c15\u0c4d\u0c37\u0c23\u0c3e\u0c32\u0c41 \u0c05\u0c24\u0c4d\u0c2f\u0c35\u0c38\u0c30 \u0c35\u0c48\u0c26\u0c4d\u0c2f \u0c2a\u0c30\u0c3f\u0c38\u0c4d\u0c25\u0c3f\u0c24\u0c3f \u0c15\u0c3e\u0c35\u0c1a\u0c4d\u0c1a",
+        "error": null,
+        "scenario_id": "multilingual_telugu",
+        "scenario_name": "Telugu Specialty Inquiry",
+        "trial_num": 2
+      },
+      {
+        "user_message": "\u092e\u0941\u091d\u0947 \u092c\u0941\u0916\u093e\u0930 \u0939\u0948, \u0915\u094d\u092f\u093e \u091c\u0928\u0930\u0932 \u092b\u093f\u091c\u093f\u0936\u093f\u092f\u0928 \u092e\u093f\u0932 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902?",
+        "first_response_latency_ms": 3821.628400008194,
+        "total_latency_ms": 3821.628400008194,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "AI \u0938\u0947\u0935\u093e \u0905\u0938\u094d\u0925\u093e\u092f\u0940 \u0930\u0942\u092a \u0938\u0947 \u0905\u0928\u0941\u092a\u0932\u092c\u094d\u0927 \u0939\u0948 (Gemini API returned HTTP 404.)\u0964 \u0915\u0943\u092a\u092f\u093e \u0925\u094b\u0921\u093c\u0940 \u0926\u0947\u0930 \u092c\u093e\u0926 \u092a\u0941\u0928\u0903 \u092a\u094d\u0930\u092f\u093e\u0938 \u0915\u0930\u0947\u0902\u0964",
+        "error": null,
+        "scenario_id": "multilingual_hindi",
+        "scenario_name": "Hindi Consultation Inquiry",
+        "trial_num": 1
+      },
+      {
+        "user_message": "\u092e\u0941\u091d\u0947 \u092c\u0941\u0916\u093e\u0930 \u0939\u0948, \u0915\u094d\u092f\u093e \u091c\u0928\u0930\u0932 \u092b\u093f\u091c\u093f\u0936\u093f\u092f\u0928 \u092e\u093f\u0932 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902?",
+        "first_response_latency_ms": 3912.9910999909043,
+        "total_latency_ms": 3912.9910999909043,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "AI \u0938\u0947\u0935\u093e \u0905\u0938\u094d\u0925\u093e\u092f\u0940 \u0930\u0942\u092a \u0938\u0947 \u0905\u0928\u0941\u092a\u0932\u092c\u094d\u0927 \u0939\u0948 (Gemini API returned HTTP 404.)\u0964 \u0915\u0943\u092a\u092f\u093e \u0925\u094b\u0921\u093c\u0940 \u0926\u0947\u0930 \u092c\u093e\u0926 \u092a\u0941\u0928\u0903 \u092a\u094d\u0930\u092f\u093e\u0938 \u0915\u0930\u0947\u0902\u0964",
+        "error": null,
+        "scenario_id": "multilingual_hindi",
+        "scenario_name": "Hindi Consultation Inquiry",
+        "trial_num": 2
+      }
+    ]
+  },
+  "gemini_2_5_flash_fallback": {
+    "model": "gemini-2.5-flash",
+    "fallback": true,
+    "trials": [
+      {
+        "user_message": "I need to consult a cardiologist for chest pain",
+        "first_response_latency_ms": 6899.892150016967,
+        "total_latency_ms": 13799.784300033934,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_doctors"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "I am very sorry to hear that you are experiencing chest pain. Since chest pain can be serious, please seek immediate eme",
+        "error": null,
+        "scenario_id": "cardiology_search",
+        "scenario_name": "Cardiology Doctor Search",
+        "trial_num": 1
+      },
+      {
+        "user_message": "I need to consult a cardiologist for chest pain",
+        "first_response_latency_ms": 18315.567949961405,
+        "total_latency_ms": 36631.13589992281,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_doctors"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "I am very sorry to hear that you are experiencing chest pain. Since chest pain can sometimes be serious, please consider",
+        "error": null,
+        "scenario_id": "cardiology_search",
+        "scenario_name": "Cardiology Doctor Search",
+        "trial_num": 2
+      },
+      {
+        "user_message": "Anyone is okay, earliest slot please",
+        "first_response_latency_ms": 5890.886399972563,
+        "total_latency_ms": 17672.65919991769,
+        "model_call_rounds": 3,
+        "tools_executed": [
+          "search_doctors",
+          "get_available_slots"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "I have checked the schedule for Dr. Rajesh Sharma in Cardiology. The earliest available slot is on November 1, 2026, fro",
+        "error": null,
+        "scenario_id": "flexible_slot",
+        "scenario_name": "'Anyone is okay' Slot Selection",
+        "trial_num": 1
+      },
+      {
+        "user_message": "Anyone is okay, earliest slot please",
+        "first_response_latency_ms": 10910.95249999004,
+        "total_latency_ms": 32732.857499970123,
+        "model_call_rounds": 3,
+        "tools_executed": [
+          "search_doctors",
+          "get_available_slots"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "The earliest available slot with Dr. Rajesh Sharma (Cardiology) is on November 1, 2026, from 10:00 AM to 10:30 AM (Slot ",
+        "error": null,
+        "scenario_id": "flexible_slot",
+        "scenario_name": "'Anyone is okay' Slot Selection",
+        "trial_num": 2
+      },
+      {
+        "user_message": "No, I'm new here",
+        "first_response_latency_ms": 4831.958499969915,
+        "total_latency_ms": 4831.958499969915,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": true,
+        "args_correct": true,
+        "context_retained": true,
+        "reply_preview": "Welcome to Aarogya One Hospital! We are glad to have you. \n\nSince you are a new patient, could you please tell me your f",
+        "error": null,
+        "scenario_id": "contextual_no",
+        "scenario_name": "Contextual 'No' for New Patient",
+        "trial_num": 1
+      },
+      {
+        "user_message": "No, I'm new here",
+        "first_response_latency_ms": 22958.392800064757,
+        "total_latency_ms": 22958.392800064757,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": true,
+        "args_correct": true,
+        "context_retained": true,
+        "reply_preview": "Welcome to Aarogya One Hospital! We are glad to have you. \n\nSince you are a new patient, could you please tell me your *",
+        "error": null,
+        "scenario_id": "contextual_no",
+        "scenario_name": "Contextual 'No' for New Patient",
+        "trial_num": 2
+      },
+      {
+        "user_message": "Do you accept Star Health Insurance?",
+        "first_response_latency_ms": 3.8957499782554805,
+        "total_latency_ms": 7.791499956510961,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_hospital_insurance"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u2139\ufe0f The requested insurance provider ('Star Health') is not currently listed in Aarogya One Hospital's active network rec",
+        "error": null,
+        "scenario_id": "insurance_lookup",
+        "scenario_name": "Insurance Provider Lookup",
+        "trial_num": 1
+      },
+      {
+        "user_message": "Do you accept Star Health Insurance?",
+        "first_response_latency_ms": 2.325700013898313,
+        "total_latency_ms": 4.651400027796626,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_hospital_insurance"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u2139\ufe0f The requested insurance provider ('Star Health') is not currently listed in Aarogya One Hospital's active network rec",
+        "error": null,
+        "scenario_id": "insurance_lookup",
+        "scenario_name": "Insurance Provider Lookup",
+        "trial_num": 2
+      },
+      {
+        "user_message": "Check my lab report with verification code 847291",
+        "first_response_latency_ms": 3.1328999903053045,
+        "total_latency_ms": 6.265799980610609,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "check_lab_report_status"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u274c Invalid or expired verification code: We could not verify a lab order with that 6-digit code. Please double-check your",
+        "error": null,
+        "scenario_id": "lab_verification",
+        "scenario_name": "Lab Report Verification",
+        "trial_num": 1
+      },
+      {
+        "user_message": "Check my lab report with verification code 847291",
+        "first_response_latency_ms": 1.6783500323072076,
+        "total_latency_ms": 3.356700064614415,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "check_lab_report_status"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u274c Invalid or expired verification code: We could not verify a lab order with that 6-digit code. Please double-check your",
+        "error": null,
+        "scenario_id": "lab_verification",
+        "scenario_name": "Lab Report Verification",
+        "trial_num": 2
+      },
+      {
+        "user_message": "\u0c28\u0c3e\u0c15\u0c41 \u0c17\u0c41\u0c02\u0c21\u0c46 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f\u0c17\u0c3e \u0c09\u0c02\u0c26\u0c3f, \u0c15\u0c3e\u0c30\u0c4d\u0c21\u0c3f\u0c2f\u0c3e\u0c32\u0c1c\u0c3f\u0c38\u0c4d\u0c1f\u0c4d \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3f",
+        "first_response_latency_ms": 4955.8878999669105,
+        "total_latency_ms": 4955.8878999669105,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\ud83d\udea8 **\u0c05\u0c24\u0c4d\u0c2f\u0c35\u0c38\u0c30 \u0c39\u0c46\u0c1a\u0c4d\u0c1a\u0c30\u0c3f\u0c15 / Emergency Alert:**\n\u0c2e\u0c40\u0c15\u0c41 \u0c17\u0c41\u0c02\u0c21\u0c46 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f\u0c17\u0c3e \u0c09\u0c02\u0c26\u0c28\u0c3f \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c3e\u0c30\u0c41. \u0c07\u0c26\u0c3f \u0c05\u0c24\u0c4d\u0c2f\u0c35\u0c38\u0c30 \u0c2a\u0c30\u0c3f\u0c38\u0c4d\u0c25\u0c3f\u0c24\u0c3f \u0c15\u0c3e\u0c35\u0c1a\u0c4d\u0c1a\u0c41! \u0c26\u0c2f\u0c1a\u0c47\u0c38\u0c3f \u0c35\u0c46\u0c02\u0c1f",
+        "error": null,
+        "scenario_id": "multilingual_telugu",
+        "scenario_name": "Telugu Specialty Inquiry",
+        "trial_num": 1
+      },
+      {
+        "user_message": "\u0c28\u0c3e\u0c15\u0c41 \u0c17\u0c41\u0c02\u0c21\u0c46 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f\u0c17\u0c3e \u0c09\u0c02\u0c26\u0c3f, \u0c15\u0c3e\u0c30\u0c4d\u0c21\u0c3f\u0c2f\u0c3e\u0c32\u0c1c\u0c3f\u0c38\u0c4d\u0c1f\u0c4d \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3f",
+        "first_response_latency_ms": 4831.209399970248,
+        "total_latency_ms": 4831.209399970248,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u0c06\u0c30\u0c4b\u0c17\u0c4d\u0c2f \u0c35\u0c28\u0c4d \u0c39\u0c3e\u0c38\u0c4d\u0c2a\u0c3f\u0c1f\u0c32\u0c4d (\u0c2c\u0c46\u0c02\u0c17\u0c33\u0c42\u0c30\u0c41) \u0c15\u0c3f \u0c38\u0c4d\u0c35\u0c3e\u0c17\u0c24\u0c02. \u0c2e\u0c40\u0c30\u0c41 \u0c17\u0c41\u0c02\u0c21\u0c46 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f\u0c24\u0c4b \u0c2c\u0c3e\u0c27\u0c2a\u0c21\u0c41\u0c24\u0c41\u0c28\u0c4d\u0c28\u0c3e\u0c30\u0c28\u0c3f \u0c35\u0c3f\u0c28\u0c4d\u0c28\u0c02\u0c26\u0c41\u0c15\u0c41 \u0c28\u0c47\u0c28\u0c41 \u0c1a\u0c3f\u0c02\u0c24\u0c3f\u0c38\u0c4d\u0c24\u0c41\u0c28\u0c4d\u0c28\u0c3e\u0c28\u0c41. \u0c07\u0c26\u0c3f \u0c05\u0c24\u0c4d",
+        "error": null,
+        "scenario_id": "multilingual_telugu",
+        "scenario_name": "Telugu Specialty Inquiry",
+        "trial_num": 2
+      },
+      {
+        "user_message": "\u092e\u0941\u091d\u0947 \u092c\u0941\u0916\u093e\u0930 \u0939\u0948, \u0915\u094d\u092f\u093e \u091c\u0928\u0930\u0932 \u092b\u093f\u091c\u093f\u0936\u093f\u092f\u0928 \u092e\u093f\u0932 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902?",
+        "first_response_latency_ms": 5842.824199935421,
+        "total_latency_ms": 5842.824199935421,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u092e\u0941\u091d\u0947 \u092f\u0939 \u0938\u0941\u0928\u0915\u0930 \u0916\u0947\u0926 \u0939\u0948 \u0915\u093f \u0906\u092a\u0915\u0940 \u0924\u092c\u0940\u092f\u0924 \u0920\u0940\u0915 \u0928\u0939\u0940\u0902 \u0939\u0948\u0964 \u092c\u0941\u0916\u093e\u0930 \u0915\u0947 \u0932\u093f\u090f \u0939\u092e\u093e\u0930\u0947 \u092a\u093e\u0938 \u091c\u0928\u0930\u0932 \u092e\u0947\u0921\u093f\u0938\u093f\u0928 (General Medicine) \u0935\u093f\u092d\u093e\u0917 \u092e\u0947\u0902 \u0935\u093f\u0936\u0947\u0937\u091c\u094d",
+        "error": null,
+        "scenario_id": "multilingual_hindi",
+        "scenario_name": "Hindi Consultation Inquiry",
+        "trial_num": 1
+      },
+      {
+        "user_message": "\u092e\u0941\u091d\u0947 \u092c\u0941\u0916\u093e\u0930 \u0939\u0948, \u0915\u094d\u092f\u093e \u091c\u0928\u0930\u0932 \u092b\u093f\u091c\u093f\u0936\u093f\u092f\u0928 \u092e\u093f\u0932 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902?",
+        "first_response_latency_ms": 5159.716199967079,
+        "total_latency_ms": 5159.716199967079,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u092e\u0941\u091d\u0947 \u092f\u0939 \u0938\u0941\u0928\u0915\u0930 \u092c\u0939\u0941\u0924 \u0916\u0947\u0926 \u0939\u0948 \u0915\u093f \u0906\u092a\u0915\u0940 \u0924\u092c\u0940\u092f\u0924 \u0920\u0940\u0915 \u0928\u0939\u0940\u0902 \u0939\u0948\u0964 \u092c\u0941\u0916\u093e\u0930 \u0915\u0947 \u0932\u093f\u090f \u0939\u092e\u093e\u0930\u0947 \u092a\u093e\u0938 \u091c\u0928\u0930\u0932 \u092e\u0947\u0921\u093f\u0938\u093f\u0928 (General Medicine) \u0935\u093f\u092d\u093e\u0917 \u092e\u0947\u0902 \u0905\u0928",
+        "error": null,
+        "scenario_id": "multilingual_hindi",
+        "scenario_name": "Hindi Consultation Inquiry",
+        "trial_num": 2
+      }
+    ]
+  },
+  "gemini_3_5_flash_lite": {
+    "model": "gemini-3.5-flash-lite",
+    "fallback": false,
+    "trials": [
+      {
+        "user_message": "I need to consult a cardiologist for chest pain",
+        "first_response_latency_ms": 3997.6001500035636,
+        "total_latency_ms": 7995.200300007127,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_doctors"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "I am very sorry to hear that you are experiencing chest pain. Since chest pain can be serious, please seek immediate eme",
+        "error": null,
+        "scenario_id": "cardiology_search",
+        "scenario_name": "Cardiology Doctor Search",
+        "trial_num": 1
+      },
+      {
+        "user_message": "I need to consult a cardiologist for chest pain",
+        "first_response_latency_ms": 12868.892650003545,
+        "total_latency_ms": 25737.78530000709,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_doctors"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u26a0\ufe0f Emergency Guidance: Chest pain or acute breathing/neurological symptoms can be a medical emergency. If your symptoms ",
+        "error": null,
+        "scenario_id": "cardiology_search",
+        "scenario_name": "Cardiology Doctor Search",
+        "trial_num": 2
+      },
+      {
+        "user_message": "Anyone is okay, earliest slot please",
+        "first_response_latency_ms": 5631.668700021692,
+        "total_latency_ms": 16895.006100065075,
+        "model_call_rounds": 3,
+        "tools_executed": [
+          "search_doctors",
+          "get_available_slots"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "The earliest available appointment with Dr. Rajesh Sharma (Cardiology) is on November 1, 2026, from 10:00 AM to 10:30 AM",
+        "error": null,
+        "scenario_id": "flexible_slot",
+        "scenario_name": "'Anyone is okay' Slot Selection",
+        "trial_num": 1
+      },
+      {
+        "user_message": "Anyone is okay, earliest slot please",
+        "first_response_latency_ms": 11267.152933326239,
+        "total_latency_ms": 33801.45879997872,
+        "model_call_rounds": 3,
+        "tools_executed": [
+          "search_doctors",
+          "get_available_slots"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "The earliest available slot is with Dr. Rajesh Sharma in Cardiology on November 1, 2026, from 10:00 AM to 10:30 AM (Slot",
+        "error": null,
+        "scenario_id": "flexible_slot",
+        "scenario_name": "'Anyone is okay' Slot Selection",
+        "trial_num": 2
+      },
+      {
+        "user_message": "No, I'm new here",
+        "first_response_latency_ms": 12498.206699965522,
+        "total_latency_ms": 12498.206699965522,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": true,
+        "args_correct": true,
+        "context_retained": true,
+        "reply_preview": "Welcome to Aarogya One Hospital! We are glad to have you. \n\nSince you are a new patient, could you please tell me your *",
+        "error": null,
+        "scenario_id": "contextual_no",
+        "scenario_name": "Contextual 'No' for New Patient",
+        "trial_num": 1
+      },
+      {
+        "user_message": "No, I'm new here",
+        "first_response_latency_ms": 3809.7027000039816,
+        "total_latency_ms": 3809.7027000039816,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": true,
+        "args_correct": true,
+        "context_retained": true,
+        "reply_preview": "Welcome to Aarogya One Hospital! We are delighted to have you. \n\nSince you are a new patient, may I please have your **f",
+        "error": null,
+        "scenario_id": "contextual_no",
+        "scenario_name": "Contextual 'No' for New Patient",
+        "trial_num": 2
+      },
+      {
+        "user_message": "Do you accept Star Health Insurance?",
+        "first_response_latency_ms": 42.26240003481507,
+        "total_latency_ms": 84.52480006963015,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_hospital_insurance"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u2139\ufe0f The requested insurance provider ('Star Health') is not currently listed in Aarogya One Hospital's active network rec",
+        "error": null,
+        "scenario_id": "insurance_lookup",
+        "scenario_name": "Insurance Provider Lookup",
+        "trial_num": 1
+      },
+      {
+        "user_message": "Do you accept Star Health Insurance?",
+        "first_response_latency_ms": 43.38935000123456,
+        "total_latency_ms": 86.77870000246912,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_hospital_insurance"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u2139\ufe0f The requested insurance provider ('Star Health') is not currently listed in Aarogya One Hospital's active network rec",
+        "error": null,
+        "scenario_id": "insurance_lookup",
+        "scenario_name": "Insurance Provider Lookup",
+        "trial_num": 2
+      },
+      {
+        "user_message": "Check my lab report with verification code 847291",
+        "first_response_latency_ms": 7.628599996678531,
+        "total_latency_ms": 15.257199993357062,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "check_lab_report_status"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u274c Invalid or expired verification code: We could not verify a lab order with that 6-digit code. Please double-check your",
+        "error": null,
+        "scenario_id": "lab_verification",
+        "scenario_name": "Lab Report Verification",
+        "trial_num": 1
+      },
+      {
+        "user_message": "Check my lab report with verification code 847291",
+        "first_response_latency_ms": 1.2701500090770423,
+        "total_latency_ms": 2.5403000181540847,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "check_lab_report_status"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u26a0\ufe0f Too many failed verification attempts. Please wait a few minutes before trying again or contact the Aarogya One Diagn",
+        "error": null,
+        "scenario_id": "lab_verification",
+        "scenario_name": "Lab Report Verification",
+        "trial_num": 2
+      },
+      {
+        "user_message": "\u0c28\u0c3e\u0c15\u0c41 \u0c17\u0c41\u0c02\u0c21\u0c46 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f\u0c17\u0c3e \u0c09\u0c02\u0c26\u0c3f, \u0c15\u0c3e\u0c30\u0c4d\u0c21\u0c3f\u0c2f\u0c3e\u0c32\u0c1c\u0c3f\u0c38\u0c4d\u0c1f\u0c4d \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3f",
+        "first_response_latency_ms": 6240.440950030461,
+        "total_latency_ms": 12480.881900060922,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_doctors"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u0c17\u0c41\u0c02\u0c21\u0c46 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f \u0c05\u0c28\u0c3f \u0c2e\u0c40\u0c30\u0c41 \u0c1a\u0c46\u0c2a\u0c4d\u0c2a\u0c21\u0c02 \u0c35\u0c3f\u0c28\u0c21\u0c3e\u0c28\u0c3f\u0c15\u0c3f \u0c1a\u0c3e\u0c32\u0c3e \u0c2c\u0c3e\u0c27\u0c17\u0c3e \u0c09\u0c02\u0c26\u0c3f. \u0c17\u0c41\u0c02\u0c21\u0c46 \u0c38\u0c02\u0c2c\u0c02\u0c27\u0c3f\u0c24 \u0c38\u0c2e\u0c38\u0c4d\u0c2f\u0c32\u0c41 \u0c05\u0c24\u0c4d\u0c2f\u0c35\u0c38\u0c30\u0c2e\u0c48\u0c28\u0c35\u0c3f \u0c15\u0c3e\u0c2c\u0c1f\u0c4d\u0c1f\u0c3f, \u0c2e\u0c40\u0c15\u0c41 \u0c24\u0c40\u0c35\u0c4d\u0c30\u0c2e\u0c48\u0c28 \u0c1b\u0c3e\u0c24\u0c40 ",
+        "error": null,
+        "scenario_id": "multilingual_telugu",
+        "scenario_name": "Telugu Specialty Inquiry",
+        "trial_num": 1
+      },
+      {
+        "user_message": "\u0c28\u0c3e\u0c15\u0c41 \u0c17\u0c41\u0c02\u0c21\u0c46 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f\u0c17\u0c3e \u0c09\u0c02\u0c26\u0c3f, \u0c15\u0c3e\u0c30\u0c4d\u0c21\u0c3f\u0c2f\u0c3e\u0c32\u0c1c\u0c3f\u0c38\u0c4d\u0c1f\u0c4d \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3f",
+        "first_response_latency_ms": 6005.028949992266,
+        "total_latency_ms": 12010.057899984531,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_doctors"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u0c26\u0c2f\u0c1a\u0c47\u0c38\u0c3f \u0c36\u0c4d\u0c30\u0c26\u0c4d\u0c27 \u0c35\u0c39\u0c3f\u0c02\u0c1a\u0c02\u0c21\u0c3f: \u0c17\u0c41\u0c02\u0c21\u0c46 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f \u0c05\u0c28\u0c47\u0c26\u0c3f \u0c05\u0c24\u0c4d\u0c2f\u0c35\u0c38\u0c30 \u0c35\u0c48\u0c26\u0c4d\u0c2f \u0c2a\u0c30\u0c3f\u0c38\u0c4d\u0c25\u0c3f\u0c24\u0c3f \u0c15\u0c3e\u0c35\u0c1a\u0c4d\u0c1a\u0c41. \u0c2e\u0c40\u0c15\u0c41 \u0c24\u0c40\u0c35\u0c4d\u0c30\u0c2e\u0c48\u0c28 \u0c1b\u0c3e\u0c24\u0c40 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f, \u0c36\u0c4d\u0c35\u0c3e\u0c38 \u0c24\u0c40\u0c38\u0c41\u0c15\u0c4b\u0c35\u0c21\u0c02\u0c32\u0c4b",
+        "error": null,
+        "scenario_id": "multilingual_telugu",
+        "scenario_name": "Telugu Specialty Inquiry",
+        "trial_num": 2
+      },
+      {
+        "user_message": "\u092e\u0941\u091d\u0947 \u092c\u0941\u0916\u093e\u0930 \u0939\u0948, \u0915\u094d\u092f\u093e \u091c\u0928\u0930\u0932 \u092b\u093f\u091c\u093f\u0936\u093f\u092f\u0928 \u092e\u093f\u0932 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902?",
+        "first_response_latency_ms": 3221.8162999488413,
+        "total_latency_ms": 3221.8162999488413,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u0928\u092e\u0938\u094d\u0924\u0947! \u092e\u0941\u091d\u0947 \u092f\u0939 \u0938\u0941\u0928\u0915\u0930 \u0916\u0947\u0926 \u0939\u0948 \u0915\u093f \u0906\u092a\u0915\u0940 \u0924\u092c\u0940\u092f\u0924 \u0920\u0940\u0915 \u0928\u0939\u0940\u0902 \u0939\u0948\u0964 \u092c\u0941\u0916\u093e\u0930 \u0915\u0947 \u0932\u093f\u090f \u0939\u092e\u093e\u0930\u0947 \u092a\u093e\u0938 \u091c\u0928\u0930\u0932 \u092e\u0947\u0921\u093f\u0938\u093f\u0928 (General Medicine) \u0935\u093f\u092d\u093e\u0917 \u092e\u0947\u0902",
+        "error": null,
+        "scenario_id": "multilingual_hindi",
+        "scenario_name": "Hindi Consultation Inquiry",
+        "trial_num": 1
+      },
+      {
+        "user_message": "\u092e\u0941\u091d\u0947 \u092c\u0941\u0916\u093e\u0930 \u0939\u0948, \u0915\u094d\u092f\u093e \u091c\u0928\u0930\u0932 \u092b\u093f\u091c\u093f\u0936\u093f\u092f\u0928 \u092e\u093f\u0932 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902?",
+        "first_response_latency_ms": 3192.435400094837,
+        "total_latency_ms": 3192.435400094837,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u0928\u092e\u0938\u094d\u0924\u0947! \u092e\u0941\u091d\u0947 \u092f\u0939 \u0938\u0941\u0928\u0915\u0930 \u0916\u0947\u0926 \u0939\u0948 \u0915\u093f \u0906\u092a\u0915\u0940 \u0924\u092c\u0940\u092f\u0924 \u0920\u0940\u0915 \u0928\u0939\u0940\u0902 \u0939\u0948\u0964 \u092c\u0941\u0916\u093e\u0930 \u0915\u0947 \u0932\u093f\u090f \u0939\u092e\u093e\u0930\u0947 \u092a\u093e\u0938 **\u091c\u0928\u0930\u0932 \u092e\u0947\u0921\u093f\u0938\u093f\u0928 (General Medicine)** \u0935\u093f\u092d\u093e\u0917",
+        "error": null,
+        "scenario_id": "multilingual_hindi",
+        "scenario_name": "Hindi Consultation Inquiry",
+        "trial_num": 2
+      }
+    ]
+  },
+  "gemini_3_5_flash": {
+    "model": "gemini-3.5-flash",
+    "fallback": false,
+    "trials": [
+      {
+        "user_message": "I need to consult a cardiologist for chest pain",
+        "first_response_latency_ms": 7346.996450040024,
+        "total_latency_ms": 14693.992900080048,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_doctors"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "If you or the patient are experiencing severe, sudden, or worsening chest pain, acute shortness of breath, or any life-t",
+        "error": null,
+        "scenario_id": "cardiology_search",
+        "scenario_name": "Cardiology Doctor Search",
+        "trial_num": 1
+      },
+      {
+        "user_message": "I need to consult a cardiologist for chest pain",
+        "first_response_latency_ms": 11364.29220001446,
+        "total_latency_ms": 22728.58440002892,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_doctors"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "**Emergency Notice:** If you are currently experiencing severe or sudden chest pain, difficulty breathing, dizziness, or",
+        "error": null,
+        "scenario_id": "cardiology_search",
+        "scenario_name": "Cardiology Doctor Search",
+        "trial_num": 2
+      },
+      {
+        "user_message": "Anyone is okay, earliest slot please",
+        "first_response_latency_ms": 12748.432066679621,
+        "total_latency_ms": 38245.296200038865,
+        "model_call_rounds": 3,
+        "tools_executed": [
+          "search_doctors",
+          "get_available_slots"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "Response:default_api:get_available_slots{data:[{doctor_id:\n33333333-0006-0000-0000-000000000006\n,doctor_name:\nDr. Sunita",
+        "error": null,
+        "scenario_id": "flexible_slot",
+        "scenario_name": "'Anyone is okay' Slot Selection",
+        "trial_num": 1
+      },
+      {
+        "user_message": "Anyone is okay, earliest slot please",
+        "first_response_latency_ms": 5814.69264999032,
+        "total_latency_ms": 11629.38529998064,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_doctors"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "The AI reasoning service is temporarily unavailable (Gemini API returned HTTP 429.). Please try again shortly or continu",
+        "error": null,
+        "scenario_id": "flexible_slot",
+        "scenario_name": "'Anyone is okay' Slot Selection",
+        "trial_num": 2
+      },
+      {
+        "user_message": "No, I'm new here",
+        "first_response_latency_ms": 1765.0548999663442,
+        "total_latency_ms": 1765.0548999663442,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": true,
+        "args_correct": true,
+        "context_retained": false,
+        "reply_preview": "The AI reasoning service is temporarily unavailable (Gemini API returned HTTP 429.). Please try again shortly or continu",
+        "error": null,
+        "scenario_id": "contextual_no",
+        "scenario_name": "Contextual 'No' for New Patient",
+        "trial_num": 1
+      },
+      {
+        "user_message": "No, I'm new here",
+        "first_response_latency_ms": 1957.4318999657407,
+        "total_latency_ms": 1957.4318999657407,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": true,
+        "args_correct": true,
+        "context_retained": false,
+        "reply_preview": "The AI reasoning service is temporarily unavailable (Gemini API returned HTTP 429.). Please try again shortly or continu",
+        "error": null,
+        "scenario_id": "contextual_no",
+        "scenario_name": "Contextual 'No' for New Patient",
+        "trial_num": 2
+      },
+      {
+        "user_message": "Do you accept Star Health Insurance?",
+        "first_response_latency_ms": 49.02525001671165,
+        "total_latency_ms": 98.0505000334233,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_hospital_insurance"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u2139\ufe0f The requested insurance provider ('Star Health') is not currently listed in Aarogya One Hospital's active network rec",
+        "error": null,
+        "scenario_id": "insurance_lookup",
+        "scenario_name": "Insurance Provider Lookup",
+        "trial_num": 1
+      },
+      {
+        "user_message": "Do you accept Star Health Insurance?",
+        "first_response_latency_ms": 51.81104998337105,
+        "total_latency_ms": 103.6220999667421,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "search_hospital_insurance"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u2139\ufe0f The requested insurance provider ('Star Health') is not currently listed in Aarogya One Hospital's active network rec",
+        "error": null,
+        "scenario_id": "insurance_lookup",
+        "scenario_name": "Insurance Provider Lookup",
+        "trial_num": 2
+      },
+      {
+        "user_message": "Check my lab report with verification code 847291",
+        "first_response_latency_ms": 44.013099977746606,
+        "total_latency_ms": 88.02619995549321,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "check_lab_report_status"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u274c Invalid or expired verification code: We could not verify a lab order with that 6-digit code. Please double-check your",
+        "error": null,
+        "scenario_id": "lab_verification",
+        "scenario_name": "Lab Report Verification",
+        "trial_num": 1
+      },
+      {
+        "user_message": "Check my lab report with verification code 847291",
+        "first_response_latency_ms": 32.06959995441139,
+        "total_latency_ms": 64.13919990882277,
+        "model_call_rounds": 2,
+        "tools_executed": [
+          "check_lab_report_status"
+        ],
+        "tool_selection_correct": true,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u274c Invalid or expired verification code: We could not verify a lab order with that 6-digit code. Please double-check your",
+        "error": null,
+        "scenario_id": "lab_verification",
+        "scenario_name": "Lab Report Verification",
+        "trial_num": 2
+      },
+      {
+        "user_message": "\u0c28\u0c3e\u0c15\u0c41 \u0c17\u0c41\u0c02\u0c21\u0c46 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f\u0c17\u0c3e \u0c09\u0c02\u0c26\u0c3f, \u0c15\u0c3e\u0c30\u0c4d\u0c21\u0c3f\u0c2f\u0c3e\u0c32\u0c1c\u0c3f\u0c38\u0c4d\u0c1f\u0c4d \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3f",
+        "first_response_latency_ms": 2001.923399977386,
+        "total_latency_ms": 2001.923399977386,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u26a0\ufe0f \u0c05\u0c24\u0c4d\u0c2f\u0c35\u0c38\u0c30 \u0c35\u0c48\u0c26\u0c4d\u0c2f \u0c38\u0c42\u0c1a\u0c28 (Emergency Guidance): \u0c1b\u0c3e\u0c24\u0c40 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f \u0c32\u0c47\u0c26\u0c3e \u0c24\u0c40\u0c35\u0c4d\u0c30\u0c2e\u0c48\u0c28 \u0c36\u0c4d\u0c35\u0c3e\u0c38/\u0c28\u0c30\u0c3e\u0c32 \u0c32\u0c15\u0c4d\u0c37\u0c23\u0c3e\u0c32\u0c41 \u0c05\u0c24\u0c4d\u0c2f\u0c35\u0c38\u0c30 \u0c35\u0c48\u0c26\u0c4d\u0c2f \u0c2a\u0c30\u0c3f\u0c38\u0c4d\u0c25\u0c3f\u0c24\u0c3f \u0c15\u0c3e\u0c35\u0c1a\u0c4d\u0c1a",
+        "error": null,
+        "scenario_id": "multilingual_telugu",
+        "scenario_name": "Telugu Specialty Inquiry",
+        "trial_num": 1
+      },
+      {
+        "user_message": "\u0c28\u0c3e\u0c15\u0c41 \u0c17\u0c41\u0c02\u0c21\u0c46 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f\u0c17\u0c3e \u0c09\u0c02\u0c26\u0c3f, \u0c15\u0c3e\u0c30\u0c4d\u0c21\u0c3f\u0c2f\u0c3e\u0c32\u0c1c\u0c3f\u0c38\u0c4d\u0c1f\u0c4d \u0c15\u0c3e\u0c35\u0c3e\u0c32\u0c3f",
+        "first_response_latency_ms": 2227.744600037113,
+        "total_latency_ms": 2227.744600037113,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "\u26a0\ufe0f \u0c05\u0c24\u0c4d\u0c2f\u0c35\u0c38\u0c30 \u0c35\u0c48\u0c26\u0c4d\u0c2f \u0c38\u0c42\u0c1a\u0c28 (Emergency Guidance): \u0c1b\u0c3e\u0c24\u0c40 \u0c28\u0c4a\u0c2a\u0c4d\u0c2a\u0c3f \u0c32\u0c47\u0c26\u0c3e \u0c24\u0c40\u0c35\u0c4d\u0c30\u0c2e\u0c48\u0c28 \u0c36\u0c4d\u0c35\u0c3e\u0c38/\u0c28\u0c30\u0c3e\u0c32 \u0c32\u0c15\u0c4d\u0c37\u0c23\u0c3e\u0c32\u0c41 \u0c05\u0c24\u0c4d\u0c2f\u0c35\u0c38\u0c30 \u0c35\u0c48\u0c26\u0c4d\u0c2f \u0c2a\u0c30\u0c3f\u0c38\u0c4d\u0c25\u0c3f\u0c24\u0c3f \u0c15\u0c3e\u0c35\u0c1a\u0c4d\u0c1a",
+        "error": null,
+        "scenario_id": "multilingual_telugu",
+        "scenario_name": "Telugu Specialty Inquiry",
+        "trial_num": 2
+      },
+      {
+        "user_message": "\u092e\u0941\u091d\u0947 \u092c\u0941\u0916\u093e\u0930 \u0939\u0948, \u0915\u094d\u092f\u093e \u091c\u0928\u0930\u0932 \u092b\u093f\u091c\u093f\u0936\u093f\u092f\u0928 \u092e\u093f\u0932 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902?",
+        "first_response_latency_ms": 16364.599599968642,
+        "total_latency_ms": 16364.599599968642,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "AI \u0938\u0947\u0935\u093e \u0905\u0938\u094d\u0925\u093e\u092f\u0940 \u0930\u0942\u092a \u0938\u0947 \u0905\u0928\u0941\u092a\u0932\u092c\u094d\u0927 \u0939\u0948 (Gemini API returned HTTP 429.)\u0964 \u0915\u0943\u092a\u092f\u093e \u0925\u094b\u0921\u093c\u0940 \u0926\u0947\u0930 \u092c\u093e\u0926 \u092a\u0941\u0928\u0903 \u092a\u094d\u0930\u092f\u093e\u0938 \u0915\u0930\u0947\u0902\u0964",
+        "error": null,
+        "scenario_id": "multilingual_hindi",
+        "scenario_name": "Hindi Consultation Inquiry",
+        "trial_num": 1
+      },
+      {
+        "user_message": "\u092e\u0941\u091d\u0947 \u092c\u0941\u0916\u093e\u0930 \u0939\u0948, \u0915\u094d\u092f\u093e \u091c\u0928\u0930\u0932 \u092b\u093f\u091c\u093f\u0936\u093f\u092f\u0928 \u092e\u093f\u0932 \u0938\u0915\u0924\u0947 \u0939\u0948\u0902?",
+        "first_response_latency_ms": 5471.907100058161,
+        "total_latency_ms": 5471.907100058161,
+        "model_call_rounds": 1,
+        "tools_executed": [],
+        "tool_selection_correct": false,
+        "args_correct": false,
+        "context_retained": true,
+        "reply_preview": "AI \u0938\u0947\u0935\u093e \u0905\u0938\u094d\u0925\u093e\u092f\u0940 \u0930\u0942\u092a \u0938\u0947 \u0905\u0928\u0941\u092a\u0932\u092c\u094d\u0927 \u0939\u0948 (Gemini API returned HTTP 429.)\u0964 \u0915\u0943\u092a\u092f\u093e \u0925\u094b\u0921\u093c\u0940 \u0926\u0947\u0930 \u092c\u093e\u0926 \u092a\u0941\u0928\u0903 \u092a\u094d\u0930\u092f\u093e\u0938 \u0915\u0930\u0947\u0902\u0964",
+        "error": null,
+        "scenario_id": "multilingual_hindi",
+        "scenario_name": "Hindi Consultation Inquiry",
+        "trial_num": 2
+      }
+    ]
+  }
+}

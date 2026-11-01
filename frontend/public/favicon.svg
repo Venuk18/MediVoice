@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7657FF" />
+      <stop offset="100%" stop-color="#4387FF" />
+    </linearGradient>
+    <linearGradient id="wave" x1="0" y1="0" x2="0" y2="32" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#25D9C3" />
+      <stop offset="100%" stop-color="#B9FFF2" />
+    </linearGradient>
+  </defs>
+  <!-- Background rounded squircle -->
+  <rect width="64" height="64" rx="16" fill="url(#bg)" />
+  
+  <!-- Subtle inner shadow ring -->
+  <rect x="2" y="2" width="60" height="60" rx="14" stroke="white" stroke-opacity="0.15" stroke-width="1.5" />
+
+  <!-- MediVoice Speech Wave & Hospital Cross -->
+  <!-- Hospital Cross Center Symbol -->
+  <path d="M28 20h8v24h-8z" fill="white" />
+  <path d="M20 28h24v8h-24z" fill="white" />
+  
+  <!-- Voice Wave Accents (Left & Right) -->
+  <rect x="12" y="26" width="4" height="12" rx="2" fill="url(#wave)" />
+  <rect x="48" y="26" width="4" height="12" rx="2" fill="url(#wave)" />
+  <circle cx="50" cy="14" r="3" fill="#25D9C3" />
+</svg>
+

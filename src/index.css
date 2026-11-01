@@ -1,0 +1,198 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --brand-violet: #7657FF;
+    --brand-blue: #4387FF;
+    --brand-turquoise: #25D9C3;
+    --brand-coral: #FF7D8A;
+    --brand-amber: #FFC76A;
+    --brand-lavender: #EAE5FF;
+    --brand-ivory: #FAF9F6;
+    --brand-ink: #17233B;
+    --surface: #ffffff;
+    --surface-muted: #F4F3F8;
+    --text-primary: #17233B;
+    --text-secondary: #61708A;
+    --border-subtle: #E7E8F0;
+    --focus-ring: #7657FF;
+  }
+
+  html {
+    font-family: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: #FAF9F6;
+    color: #17233B;
+    color-scheme: light;
+    scroll-behavior: smooth;
+  }
+
+  h1, h2, h3, h4, h5, h6, .font-display {
+    font-family: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+    letter-spacing: -0.02em;
+  }
+
+  body { margin: 0; min-width: 320px; }
+
+  button, input, select, textarea { font: inherit; }
+
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  code, pre, .font-mono, .tabular-nums {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Custom subtle scrollbars for dense operational tables & chat transcripts */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #F4F3F8;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #CDD0DC;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #A9AFC0;
+}
+
+/* Shared brand surfaces used by the active nested frontend. */
+.patient-shell {
+  background: var(--brand-ivory);
+  color: var(--brand-ink);
+}
+
+/* Move the existing patient features onto readable light surfaces without
+   replacing their route, workflow, or API implementation. */
+.patient-shell [class~="bg-[#111B2E]"],
+.patient-shell [class~="bg-[#0B1020]"] {
+  background-color: #fff !important;
+}
+
+.patient-shell [class~="border-[#334155]"],
+.patient-shell [class~="border-[#334155]/70"] {
+  border-color: #E7E4F1 !important;
+}
+
+.patient-shell [class~="text-[#E5EDF7]"] { color: #17233B !important; }
+.patient-shell [class~="text-[#94A3B8]"] { color: #61708A !important; }
+.patient-shell [class~="text-[#2DD4BF]"] { color: #087E75 !important; }
+.patient-shell [class~="text-[#38BDF8]"] { color: #2861B7 !important; }
+
+.patient-shell input, .patient-shell select, .patient-shell textarea {
+  border-color: #E3E2EC;
+  background-color: #fff;
+  color: #17233B;
+}
+
+.patient-nav {
+  border-color: rgba(234, 229, 255, .75);
+  background: rgba(255, 255, 255, .88);
+  box-shadow: 0 8px 30px rgba(35, 31, 70, .06);
+}
+
+.patient-hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 0;
+  background: radial-gradient(ellipse at 88% 8%, rgba(95, 190, 255, .48), transparent 38%),
+    radial-gradient(ellipse at 4% 100%, rgba(37, 217, 195, .2), transparent 32%),
+    linear-gradient(135deg, #6043E9 0%, #7657FF 48%, #4387FF 100%);
+  box-shadow: 0 28px 70px rgba(91, 70, 220, .2);
+}
+
+.patient-hero::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  width: 25rem;
+  height: 25rem;
+  right: -8rem;
+  bottom: -15rem;
+  border: 1px solid rgba(255,255,255,.24);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2.5rem rgba(255,255,255,.045), 0 0 0 5rem rgba(255,255,255,.035);
+}
+
+.assistant-panel {
+  border-color: #E4E1F3;
+  background: #fff;
+  box-shadow: 0 24px 65px rgba(47, 48, 88, .12);
+}
+
+.assistant-header {
+  background: linear-gradient(115deg, #F4F0FF, #EDF6FF 66%, #EAFBF8);
+}
+
+.assistant-orb {
+  background: radial-gradient(circle at 32% 25%, #A8F7EA 0 8%, #4387FF 30%, #7657FF 68%, #4830B8 100%);
+  box-shadow: 0 0 0 5px rgba(118, 87, 255, .1), 0 8px 28px rgba(91, 70, 220, .34);
+}
+
+.staff-workspace {
+  background: #F6F6FA;
+}
+
+.staff-sidebar {
+  border-color: #E7E8F0;
+  background: #fff;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .assistant-orb { animation: orb-breathe 4.2s ease-in-out infinite; }
+  @keyframes orb-breathe {
+    50% { box-shadow: 0 0 0 9px rgba(118, 87, 255, .08), 0 10px 34px rgba(67, 135, 255, .32); }
+  }
+
+  @keyframes voiceOrbPulse {
+    0%, 100% {
+      transform: scale(1);
+      box-shadow: 0 0 50px rgba(118, 87, 255, 0.4), 0 0 90px rgba(67, 135, 255, 0.25), 0 0 130px rgba(37, 191, 174, 0.2);
+    }
+    50% {
+      transform: scale(1.07);
+      box-shadow: 0 0 70px rgba(118, 87, 255, 0.6), 0 0 120px rgba(67, 135, 255, 0.45), 0 0 160px rgba(37, 191, 174, 0.35);
+    }
+  }
+
+  @keyframes voiceShimmer {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  @keyframes waveBarMotion {
+    0%, 100% { transform: scaleY(0.2); }
+    50% { transform: scaleY(1); }
+  }
+
+  .voice-orb-active {
+    animation: voiceOrbPulse 2.4s ease-in-out infinite;
+  }
+
+  .voice-shimmer-ring {
+    animation: voiceShimmer 16s linear infinite;
+  }
+}
+
+/* Respect prefers-reduced-motion for all animated elements */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

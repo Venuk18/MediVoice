@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MediVoice Experimental TTS Browser Benchmark</title>
+  <style>
+    body { font: 16px system-ui, sans-serif; margin: 2rem auto; max-width: 900px; padding: 0 1rem; }
+    button { font: inherit; padding: .7rem 1rem; } pre { white-space: pre-wrap; background: #f4f5f7; padding: 1rem; }
+    .notice { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>MediVoice Experimental TTS Browser Benchmark</h1>
+  <p>This page sends only fixed synthetic assistant phrases to the configured Gnani Timbre REST and SSE paths. It does not use a microphone, patient text, or raw audio.</p>
+  <p class="notice">Run 20 paired trials per language. The browser plays each response and records request, audio receipt, playback start, and playback completion times. Keep the browser tab active and audio unmuted.</p>
+  <button id="run">Run 20 paired trials per language</button>
+  <button id="download" disabled>Download results JSON</button>
+  <p id="status">Ready.</p>
+  <pre id="results">No results yet.</pre>
+  <script type="module">
+    import { medivoiceApi } from '/src/services/api.ts';
+
+    const phrases = {
+      en: 'Your appointment request is ready. Please review the details before confirming.',
+      te: 'మీ అపాయింట్‌మెంట్ అభ్యర్థన సిద్ధంగా ఉంది. నిర్ధారించే ముందు వివరాలను పరిశీలించండి.',
+    };
+    const samples = 20;
+    const resultsNode = document.querySelector('#results');
+    const statusNode = document.querySelector('#status');
+    const runButton = document.querySelector('#run');
+    const downloadButton = document.querySelector('#download');
+    let results = [];
+
+    function playBlob(blob) {
+      return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        const metrics = {};
+        audio.onplaying = () => { metrics.first_audible_playback_ms = performance.now(); };
+        audio.onended = () => { metrics.playback_completion_ms = performance.now(); URL.revokeObjectURL(url); resolve(metrics); };
+        audio.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Browser could not play the REST WAV response')); };
+        audio.play().catch(reject);
+      });
+    }
+
+    async function baseline(language, trial, correlationId) {
+      const requestStart = performance.now();
+      const blob = await medivoiceApi.synthesizeSpeech(phrases[language], language, undefined, correlationId);
+      const audioReceived = performance.now();
+      const playback = await playBlob(blob);
+      return {
+        language, trial, path: 'REST',
+        request_start_ms: 0,
+        first_audio_chunk_received_ms: audioReceived - requestStart,
+        final_audio_chunk_received_ms: audioReceived - requestStart,
+        first_audible_playback_ms: playback.first_audible_playback_ms - requestStart,
+        playback_completion_ms: playback.playback_completion_ms - requestStart,
+        total_response_duration_ms: playback.playback_completion_ms - requestStart,
+      };
+    }
+
+    async function streaming(language, trial, correlationId) {
+      const requestStart = performance.now();
+      let firstAudible;
+      const timing = {};
+      await medivoiceApi.streamSynthesizeSpeech(
+        phrases[language], language,
+        () => { firstAudible = performance.now() - requestStart; },
+        undefined,
+        (stage, elapsed) => { timing[stage] = elapsed; },
+        correlationId,
+      );
+      return {
+        language, trial, path: 'SSE', request_start_ms: 0,
+        first_audio_chunk_received_ms: timing.first_audio_chunk_received_ms,
+        final_audio_chunk_received_ms: timing.final_audio_chunk_received_ms,
+        first_audible_playback_ms: firstAudible,
+        playback_completion_ms: timing.playback_completed_ms,
+        total_response_duration_ms: timing.playback_completed_ms,
+      };
+    }
+
+    function percentile(values, p) {
+      const sorted = [...values].sort((a, b) => a - b);
+      const index = (sorted.length - 1) * p;
+      const lo = Math.floor(index), hi = Math.ceil(index);
+      return sorted[lo] + (sorted[hi] - sorted[lo]) * (index - lo);
+    }
+
+    function summarize() {
+      const metrics = ['first_audio_chunk_received_ms', 'first_audible_playback_ms', 'final_audio_chunk_received_ms', 'playback_completion_ms', 'total_response_duration_ms'];
+      const summary = {};
+      for (const language of Object.keys(phrases)) {
+        summary[language] = {};
+        for (const path of ['REST', 'SSE']) {
+          const rows = results.filter((r) => r.language === language && r.path === path);
+          summary[language][path] = { n: rows.length };
+          for (const metric of metrics) {
+            const values = rows.map((r) => r[metric]).filter(Number.isFinite);
+            if (!values.length) continue;
+            summary[language][path][metric] = {
+              p50: Math.round(percentile(values, .50)),
+              p90: Math.round(percentile(values, .90)),
+              p95: Math.round(percentile(values, .95)),
+            };
+          }
+        }
+      }
+      return summary;
+    }
+
+    runButton.addEventListener('click', async () => {
+      runButton.disabled = true;
+      results = [];
+      try {
+        for (const language of Object.keys(phrases)) {
+          for (let trial = 1; trial <= samples; trial += 1) {
+            statusNode.textContent = `Running ${language.toUpperCase()} pair ${trial}/${samples}…`;
+            const correlationId = crypto.randomUUID();
+            // Alternate order across trials to reduce consistent warm-up/order bias.
+            const order = trial % 2 ? ['REST', 'SSE'] : ['SSE', 'REST'];
+            for (const path of order) {
+              results.push(path === 'REST'
+                ? await baseline(language, trial, correlationId)
+                : await streaming(language, trial, correlationId));
+            }
+            resultsNode.textContent = JSON.stringify({
+              completed_pairs: { en: results.filter((r) => r.language === 'en' && r.path === 'REST').length, te: results.filter((r) => r.language === 'te' && r.path === 'REST').length },
+              latest: summarize(),
+            }, null, 2);
+          }
+          statusNode.textContent = `${language.toUpperCase()} complete; continuing.`;
+        }
+        const report = {
+          benchmark: 'Browser playback comparison for Gnani Timbre REST vs REST SSE',
+          created_at: new Date().toISOString(),
+          repetitions_per_language_and_path: samples,
+          sample_texts: phrases,
+          notes: ['Synthetic fixed text; no microphone or patient data.', 'AudioContext scheduling and HTMLAudioElement playback are measured in this browser.'],
+          summary: summarize(),
+          trials: results,
+        };
+        resultsNode.textContent = JSON.stringify(report, null, 2);
+        statusNode.textContent = 'Complete.';
+        downloadButton.disabled = false;
+        downloadButton.onclick = () => {
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
+          link.download = 'medivoice-tts-browser-benchmark.json';
+          link.click();
+          URL.revokeObjectURL(link.href);
+        };
+      } catch (error) {
+        statusNode.textContent = `Stopped: ${error instanceof Error ? error.message : 'benchmark failed'}`;
+        resultsNode.textContent = JSON.stringify({ completed_trials: results.length, partial_results: results }, null, 2);
+      } finally {
+        runButton.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

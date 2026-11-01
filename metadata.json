@@ -1,0 +1,8 @@
+{
+  "name": "MediVoice AI - Aarogya One Hospital Backend & DB",
+  "description": "Voice-first hospital operations platform backend foundation, SQLAlchemy/PostgreSQL models, transactional appointment booking, synthetic data, and AI tool readiness for Aarogya One Hospital.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
