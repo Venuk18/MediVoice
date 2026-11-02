@@ -73,10 +73,19 @@ def test_voice_respond_end_to_end_doctor_discovery(client, db_session, seeded_ho
     assert data["tts_available"] is True
 
 
-def test_voice_respond_confirmation_gate(client, db_session, seeded_hospital_data):
+def test_voice_respond_confirmation_gate(client, db_session, seeded_hospital_data, monkeypatch):
     """
     Voice interactions strictly enforce explicit patient confirmation before booking.
     """
+    from app.services.speech.voice_orchestrator import voice_orchestrator
+
+    tts_calls = []
+
+    def mock_synthesize(text, language=None, voice=None, speed=None):
+        tts_calls.append({"text": text, "language": language})
+        return generate_synthetic_wav(0.1)
+
+    monkeypatch.setattr(voice_orchestrator.tts, "synthesize", mock_synthesize)
     session_id = "test-voice-confirm-gate"
 
     # Turn 1: Doctor selection
@@ -118,6 +127,12 @@ def test_voice_respond_confirmation_gate(client, db_session, seeded_hospital_dat
     assert data4["step"] == "AWAITING_CONFIRMATION"
     assert data4["confirmation_status"] == "PENDING"
     assert "confirm" in data4["reply"].lower() or "yes" in data4["reply"].lower()
+    assert data4["audio_base64"] is not None
+    assert data4["tts_available"] is True
+    assert data4["booked_appointment"] is None
+    assert len(tts_calls) == 4
+    assert tts_calls[-1]["text"] == data4["reply"]
+    assert tts_calls[-1]["language"] == "en"
 
     # Turn 5: Explicit confirmation
     audio_turn5 = b"RIFF" + b"MOCK_AUDIO_CONTENT:YES I confirm the booking"
@@ -130,6 +145,8 @@ def test_voice_respond_confirmation_gate(client, db_session, seeded_hospital_dat
     data5 = res5.json()
     assert data5["confirmation_status"] == "CONFIRMED"
     assert "confirmed" in data5["reply"].lower() or "booked" in data5["reply"].lower()
+    assert data5["booked_appointment"] is not None
+    assert len(tts_calls) == 5
 
 
 def test_voice_language_uses_selected_language_and_keeps_generated_session(db_session, monkeypatch):

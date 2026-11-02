@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 import json
+import random
 
 import time
 
@@ -10128,21 +10129,11 @@ class GeminiReasoningAdapter(BaseReasoningAdapter):
     GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
     DEFAULT_FALLBACK_MODELS = [
-
-        "gemini-3.5-flash",
-
         "gemini-3.5-flash-lite",
-
-        "gemini-2.5-flash",
-
-        "gemini-2.5-pro",
-
-        "gemini-2.5-flash-lite",
-
+        "gemini-flash-lite-latest",
+        "gemini-3-flash-preview",
+        "gemini-3.5-flash",
         "gemini-flash-latest",
-
-        "gemma-4-26b-a4b-it",
-
     ]
 
 
@@ -10164,9 +10155,9 @@ class GeminiReasoningAdapter(BaseReasoningAdapter):
         http_client: Optional[httpx.Client] = None,
 
         strict_mode: bool = False,
-
         enable_model_fallback: Optional[bool] = None,
-
+        max_retries: Optional[int] = None,
+        retry_backoff_base: Optional[float] = None,
     ):
 
         resolved_key = api_key if api_key is not None else (os.getenv("GEMINI_API_KEY") or settings.GEMINI_API_KEY)
@@ -10242,6 +10233,20 @@ class GeminiReasoningAdapter(BaseReasoningAdapter):
         else:
 
             self.enable_model_fallback = getattr(settings, "GEMINI_ENABLE_FALLBACK", False)
+
+        raw_retries = (
+            max_retries
+            if max_retries is not None
+            else int(os.getenv("GEMINI_MAX_RETRIES") or getattr(settings, "GEMINI_MAX_RETRIES", 2))
+        )
+        self.max_retries: int = min(max(int(raw_retries), 0), 5)
+        raw_backoff = (
+            retry_backoff_base
+            if retry_backoff_base is not None
+            else float(os.getenv("GEMINI_RETRY_BACKOFF_BASE") or getattr(settings, "GEMINI_RETRY_BACKOFF_BASE", 0.5))
+        )
+        self.retry_backoff_base: float = max(float(raw_backoff), 0.05)
+        self._sleeper: Callable[[float], None] = time.sleep
 
         self._managed_client: Optional[httpx.Client] = None
         self.last_error: Optional[str] = None
@@ -10864,91 +10869,151 @@ class GeminiReasoningAdapter(BaseReasoningAdapter):
         for candidate_model in models_to_try:
             url = f"{self.GEMINI_API_BASE}/{candidate_model}:generateContent"
             logger.info("Executing turn with Gemini reasoning model: %s", candidate_model)
-            t_call_start = time.perf_counter()
-            try:
-                response = client.post(
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=self.timeout_seconds,
-                )
-            except httpx.TimeoutException as exc:
-                elapsed_ms = (time.perf_counter() - t_call_start) * 1000
-                logger.warning("Gemini model '%s' timed out after %ss (%.1fms)", candidate_model, self.timeout_seconds, elapsed_ms)
-                self._last_status_code = None
-                self._last_error_category = "timeout"
-                last_err = ReasoningAdapterError(
-                    code="PROVIDER_TIMEOUT",
-                    safe_message=f"Gemini API request timed out after {self.timeout_seconds}s.",
-                )
-                continue
-            except httpx.HTTPError as exc:
-                elapsed_ms = (time.perf_counter() - t_call_start) * 1000
-                logger.warning("Network error contacting Gemini model '%s': %s (%.1fms)", candidate_model, exc, elapsed_ms)
-                self._last_status_code = None
-                self._last_error_category = "network_error"
-                # If pooled connection experienced a drop, recycle client
-                if self.http_client is None:
-                    self.close()
-                    client = self._get_client()
-                last_err = ReasoningAdapterError(
-                    code="PROVIDER_NETWORK_ERROR",
-                    safe_message="Network error while communicating with Gemini API.",
-                )
-                continue
 
-            self._last_status_code = response.status_code
-
-            # Gracefully handle older rollback models that don't support thinkingConfig
-            if response.status_code == 400 and "generationConfig" in payload and "thinkingConfig" in payload.get("generationConfig", {}):
-                logger.info("Model '%s' returned 400 with thinkingConfig; retrying without thinkingConfig", candidate_model)
-                self.retry_count += 1
-                retry_payload = {k: v for k, v in payload.items() if k != "generationConfig"}
+            for attempt in range(self.max_retries + 1):
+                t_call_start = time.perf_counter()
+                response = None
                 try:
-                    response = client.post(url, headers=headers, json=retry_payload, timeout=self.timeout_seconds)
-                    self._last_status_code = response.status_code
-                except Exception as retry_exc:
-                    logger.warning("Retry without thinkingConfig failed: %s", retry_exc)
+                    response = client.post(
+                        url,
+                        headers=headers,
+                        json=payload,
+                        timeout=self.timeout_seconds,
+                    )
+                except httpx.TimeoutException as exc:
+                    elapsed_ms = (time.perf_counter() - t_call_start) * 1000
+                    logger.warning(
+                        "Gemini model '%s' timed out after %ss (%.1fms)",
+                        candidate_model, self.timeout_seconds, elapsed_ms,
+                    )
+                    self._last_status_code = None
+                    self._last_error_category = "timeout"
+                    last_err = ReasoningAdapterError(
+                        code="PROVIDER_TIMEOUT",
+                        safe_message=f"Gemini API request timed out after {self.timeout_seconds}s.",
+                    )
+                    # Timeouts already consumed the full request budget (e.g. 35s); do not compound latency
+                    break
+                except httpx.HTTPError as exc:
+                    elapsed_ms = (time.perf_counter() - t_call_start) * 1000
+                    logger.warning(
+                        "Network error contacting Gemini model '%s': %s (attempt %d/%d, %.1fms)",
+                        candidate_model, exc, attempt + 1, self.max_retries + 1, elapsed_ms,
+                    )
+                    self._last_status_code = None
+                    self._last_error_category = "network_error"
+                    if self.http_client is None:
+                        self.close()
+                        client = self._get_client()
+                    last_err = ReasoningAdapterError(
+                        code="PROVIDER_NETWORK_ERROR",
+                        safe_message="Network error while communicating with Gemini API.",
+                    )
+                    if attempt < self.max_retries:
+                        delay = self.retry_backoff_base * (2 ** attempt) * random.uniform(0.85, 1.15)
+                        self.retry_count += 1
+                        self._sleeper(delay)
+                        continue
+                    break
 
-            if response.status_code == 200:
-                self._last_error_category = "none"
+                self._last_status_code = response.status_code
+
+                # Gracefully handle older rollback models that don't support thinkingConfig
+                if response.status_code == 400 and "generationConfig" in payload and "thinkingConfig" in payload.get("generationConfig", {}):
+                    logger.info("Model '%s' returned 400 with thinkingConfig; retrying without thinkingConfig", candidate_model)
+                    self.retry_count += 1
+                    retry_payload = {k: v for k, v in payload.items() if k != "generationConfig"}
+                    try:
+                        response = client.post(url, headers=headers, json=retry_payload, timeout=self.timeout_seconds)
+                        self._last_status_code = response.status_code
+                    except Exception as retry_exc:
+                        logger.warning("Retry without thinkingConfig failed: %s", retry_exc)
+
+                if response.status_code == 200:
+                    self._last_error_category = "none"
+                    try:
+                        data = response.json()
+                    except ValueError as exc:
+                        self._last_error_category = "invalid_payload"
+                        raise ReasoningAdapterError(
+                            code="INVALID_PROVIDER_RESPONSE",
+                            safe_message="Gemini API returned non-JSON response payload.",
+                            status_code=response.status_code,
+                        ) from exc
+
+                    self.last_model_used = candidate_model
+                    logger.info("Turn successfully completed using Gemini model: %s (status=200)", candidate_model)
+                    return data
+
+                # Classify error category and extract safe provider details
+                err_detail = ""
                 try:
-                    data = response.json()
-                except ValueError as exc:
+                    err_json = response.json()
+                    err_detail = err_json.get("error", {}).get("message", "").strip()
+                except Exception:
+                    err_detail = response.text[:200].strip()
+
+                if response.status_code == 429:
+                    self._last_error_category = "rate_limit"
+                elif response.status_code == 400:
                     self._last_error_category = "invalid_payload"
-                    raise ReasoningAdapterError(
-                        code="INVALID_PROVIDER_RESPONSE",
-                        safe_message="Gemini API returned non-JSON response payload.",
-                        status_code=response.status_code,
-                    ) from exc
+                elif response.status_code >= 500:
+                    self._last_error_category = "internal_error"
+                else:
+                    self._last_error_category = f"http_{response.status_code}"
 
-                self.last_model_used = candidate_model
-                logger.info("Turn successfully completed using Gemini model: %s (status=200)", candidate_model)
-                return data
+                # Check Retry-After header
+                retry_after_val = response.headers.get("Retry-After") or response.headers.get("retry-after")
+                retry_after_seconds = None
+                if retry_after_val:
+                    try:
+                        retry_after_seconds = float(retry_after_val)
+                    except (ValueError, TypeError):
+                        pass
 
-            if response.status_code == 429:
-                self._last_error_category = "rate_limit"
-            elif response.status_code == 400:
-                self._last_error_category = "invalid_payload"
-            elif response.status_code >= 500:
-                self._last_error_category = "internal_error"
-            else:
-                self._last_error_category = f"http_{response.status_code}"
+                # Check if 429 is a permanent daily quota exhaustion (not retryable within seconds)
+                is_daily_quota = response.status_code == 429 and (
+                    "limit exceeded on free tier" in err_detail.lower()
+                    or "per day limit" in err_detail.lower()
+                    or (retry_after_seconds is not None and retry_after_seconds > 10.0)
+                )
 
-            # Transient capacity or model availability errors -> try next fallback model if enabled
-            if response.status_code in (404, 429, 503) and len(models_to_try) > 1:
+                # Determine if status code is retryable (503 overloaded, 500/502/504 transient, or transient 429 rate limit)
+                is_retryable = response.status_code in (429, 500, 502, 503, 504) and not is_daily_quota
+
                 last_err = ReasoningAdapterError(
                     code="PROVIDER_HTTP_ERROR",
                     safe_message=f"Gemini API returned HTTP {response.status_code}.",
                     status_code=response.status_code,
                 )
+
+                if is_retryable and attempt < self.max_retries:
+                    # Exponential backoff with jitter, respecting Retry-After when reasonable
+                    if retry_after_seconds is not None and 0.1 <= retry_after_seconds <= 5.0:
+                        delay = retry_after_seconds
+                    else:
+                        delay = self.retry_backoff_base * (2 ** attempt) * random.uniform(0.85, 1.15)
+                    self.retry_count += 1
+                    logger.warning(
+                        "Gemini model '%s' returned HTTP %d (%s). Retrying in %.2fs (attempt %d/%d)...",
+                        candidate_model, response.status_code, err_detail[:100], delay, attempt + 1, self.max_retries,
+                    )
+                    self._sleeper(delay)
+                    continue
+
+                # Not retryable on this model or retries exhausted
+                logger.warning(
+                    "Gemini model '%s' returned non-retryable or final HTTP %d: %s",
+                    candidate_model, response.status_code, err_detail[:120],
+                )
+                break
+
+            # If fallback models are enabled and this model failed, try next model in models_to_try
+            if last_err is not None and len(models_to_try) > 1:
                 continue
 
-            raise ReasoningAdapterError(
-                code="PROVIDER_HTTP_ERROR",
-                safe_message=f"Gemini API returned HTTP {response.status_code}.",
-                status_code=response.status_code,
-            )
+            if last_err is not None:
+                raise last_err
 
         if last_err is not None:
             raise last_err

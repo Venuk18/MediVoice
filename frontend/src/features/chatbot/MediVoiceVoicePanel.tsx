@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import { medivoiceApi, ApiError } from '../../services/api';
+import { shouldAutoPlayVoiceReply, shouldResumeVoiceMode } from './turnSpeech';
 import {
   BookingDraftState,
   SupportedLanguage,
@@ -48,7 +49,7 @@ interface MediVoiceVoicePanelProps {
     toolCalls?: VoiceToolExecutionResult[];
     step?: string;
     requiresConfirmation?: boolean;
-    audioUrl?: string;
+    audioBlob?: Blob;
     bookedAppointment?: Record<string, any>;
   }) => void;
   onGreetingSpoken?: (greetingText: string, lang: SupportedLanguage) => void;
@@ -483,11 +484,13 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
 
         // Prepare synthesized assistant speech
         let audioUrlToPlay: string | null = null;
+        let assistantAudioBlob: Blob | undefined;
         if (result.audio_base64) {
           const audioBlobOut = base64ToBlob(
             result.audio_base64,
             result.audio_content_type || 'audio/wav'
           );
+          assistantAudioBlob = audioBlobOut;
           if (currentAudioUrlRef.current) {
             URL.revokeObjectURL(currentAudioUrlRef.current);
           }
@@ -499,6 +502,10 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
           result.conversation_step === 'BOOKED' ||
           result.step === 'BOOKED' ||
           Boolean(result.booked_appointment);
+        const shouldPlayInlineAudio = shouldAutoPlayVoiceReply({
+          voiceModeActive: isSessionActiveRef.current,
+          audioAvailable: Boolean(audioUrlToPlay),
+        });
 
         if (result.language && (result.language as SupportedLanguage) !== activeLang) {
           selectedLanguageRef.current = result.language as SupportedLanguage;
@@ -513,7 +520,7 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
           toolCalls: result.tool_calls || result.tool_trace,
           step: result.conversation_step || result.step,
           requiresConfirmation: result.requires_confirmation,
-          audioUrl: audioUrlToPlay || undefined,
+          audioBlob: assistantAudioBlob,
           bookedAppointment: result.booked_appointment || undefined,
         });
 
@@ -522,7 +529,7 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
           setVoiceState('assistant_speaking');
           const resumeListening = () => {
             setIsPlayingAudio(false);
-            if (isBookingCompleted) {
+            if (!shouldResumeVoiceMode(isBookingCompleted)) {
               setVoiceState('idle');
               return;
             }
@@ -571,10 +578,14 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
           }
         // Step 4 & 5: Play assistant speech. If booking is completed, stay idle/completed and do NOT restart listening loop!
         } else if (audioUrlToPlay) {
+          if (!shouldPlayInlineAudio) {
+            setVoiceState('idle');
+            return;
+          }
           setVoiceState('assistant_speaking');
           await playAudio(audioUrlToPlay, () => {
             logVoiceDiagnostic(correlationId, 'response_complete_playback_ms', performance.now() - responseReceived);
-            if (isBookingCompleted) {
+            if (!shouldResumeVoiceMode(isBookingCompleted)) {
               setVoiceState('idle');
               return;
             }

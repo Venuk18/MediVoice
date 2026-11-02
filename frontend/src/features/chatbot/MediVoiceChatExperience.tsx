@@ -37,6 +37,7 @@ import {
   VoiceToolExecutionResult,
 } from '../../types/api';
 import { MediVoiceVoicePanel } from './MediVoiceVoicePanel';
+import { shouldAutoSpeakChatTurn, TurnAudioCache } from './turnSpeech';
 
 interface ChatTurn {
   id: string;
@@ -46,6 +47,7 @@ interface ChatTurn {
   language?: SupportedLanguage;
   step?: string;
   requiresConfirmation?: boolean;
+  audioUrl?: string;
   draft?: BookingDraftState;
   toolCalls?: Array<ToolCallTrace | VoiceToolExecutionResult>;
   isError?: boolean;
@@ -314,6 +316,9 @@ export const MediVoiceChatExperience: React.FC<MediVoiceChatExperienceProps> = (
   const [playingTurnId, setPlayingTurnId] = useState<string | null>(null);
   const [synthesizingTurnId, setSynthesizingTurnId] = useState<string | null>(null);
   const turnAudioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const playingTurnIdRef = useRef<string | null>(null);
+  const synthesizingTurnIdRef = useRef<string | null>(null);
+  const [turnAudioCache] = useState(() => new TurnAudioCache());
   const lastUserMessageRef = useRef<string>('');
 
   const [turns, setTurns] = useState<ChatTurn[]>([
@@ -347,32 +352,46 @@ export const MediVoiceChatExperience: React.FC<MediVoiceChatExperienceProps> = (
         turnAudioPlayerRef.current.pause();
         turnAudioPlayerRef.current = null;
       }
+      turnAudioCache.dispose((audioUrl) => URL.revokeObjectURL(audioUrl));
     };
-  }, []);
+  }, [turnAudioCache]);
 
   const handlePlayTurnSpeech = async (turn: ChatTurn) => {
-    if (playingTurnId === turn.id) {
+    if (playingTurnIdRef.current === turn.id) {
       if (turnAudioPlayerRef.current) {
         turnAudioPlayerRef.current.pause();
-        setPlayingTurnId(null);
       }
+      turnAudioCache.finishPlayback(turn.id);
+      playingTurnIdRef.current = null;
+      setPlayingTurnId(null);
       return;
     }
+    if (synthesizingTurnIdRef.current || turnAudioCache.isPlaying(turn.id)) return;
 
     try {
+      synthesizingTurnIdRef.current = turn.id;
       setSynthesizingTurnId(turn.id);
-      const audioBlob = await medivoiceApi.synthesizeSpeech(
-        turn.content,
-        turn.language || selectedLang
-      );
-      const audioUrl = URL.createObjectURL(audioBlob);
+      const audioUrl = turn.audioUrl || await turnAudioCache.getOrCreate(turn.id, async () => {
+        const audioBlob = await medivoiceApi.synthesizeSpeech(
+          turn.content,
+          turn.language || selectedLang
+        );
+        return URL.createObjectURL(audioBlob);
+      });
+      turnAudioCache.remember(turn.id, audioUrl);
+      setTurns((prev) => prev.map((item) => item.id === turn.id ? { ...item, audioUrl } : item));
+
+      if (!turnAudioCache.beginPlayback(turn.id)) return;
 
       if (turnAudioPlayerRef.current) {
         turnAudioPlayerRef.current.pause();
       }
+      if (playingTurnIdRef.current) turnAudioCache.finishPlayback(playingTurnIdRef.current);
 
       const audio = new Audio(audioUrl);
       turnAudioPlayerRef.current = audio;
+      playingTurnIdRef.current = turn.id;
+      setPlayingTurnId(turn.id);
 
       audio.onplay = () => {
         setPlayingTurnId(turn.id);
@@ -380,20 +399,28 @@ export const MediVoiceChatExperience: React.FC<MediVoiceChatExperienceProps> = (
       };
 
       audio.onended = () => {
-        setPlayingTurnId(null);
-        URL.revokeObjectURL(audioUrl);
+        turnAudioCache.finishPlayback(turn.id);
+        if (playingTurnIdRef.current === turn.id) playingTurnIdRef.current = null;
+        setPlayingTurnId((current) => current === turn.id ? null : current);
       };
 
       audio.onerror = () => {
-        setPlayingTurnId(null);
-        setSynthesizingTurnId(null);
+        turnAudioCache.finishPlayback(turn.id);
+        if (playingTurnIdRef.current === turn.id) playingTurnIdRef.current = null;
+        setPlayingTurnId((current) => current === turn.id ? null : current);
+        setSynthesizingTurnId((current) => current === turn.id ? null : current);
       };
 
       await audio.play();
     } catch (err) {
       console.warn('Speech synthesis failed:', err);
-      setSynthesizingTurnId(null);
-      setPlayingTurnId(null);
+      turnAudioCache.finishPlayback(turn.id);
+      if (playingTurnIdRef.current === turn.id) playingTurnIdRef.current = null;
+      setSynthesizingTurnId((current) => current === turn.id ? null : current);
+      setPlayingTurnId((current) => current === turn.id ? null : current);
+    } finally {
+      if (synthesizingTurnIdRef.current === turn.id) synthesizingTurnIdRef.current = null;
+      setSynthesizingTurnId((current) => current === turn.id ? null : current);
     }
   };
 
@@ -405,7 +432,7 @@ export const MediVoiceChatExperience: React.FC<MediVoiceChatExperienceProps> = (
     toolCalls?: Array<ToolCallTrace | VoiceToolExecutionResult>;
     step?: string;
     requiresConfirmation?: boolean;
-    audioUrl?: string;
+    audioBlob?: Blob;
     bookedAppointment?: Record<string, any>;
   }) => {
     const userTurn: ChatTurn = {
@@ -428,10 +455,13 @@ export const MediVoiceChatExperience: React.FC<MediVoiceChatExperienceProps> = (
       language: result.language,
       step: result.step,
       requiresConfirmation: result.requiresConfirmation,
+      audioUrl: result.audioBlob ? URL.createObjectURL(result.audioBlob) : undefined,
       draft: result.draft,
       toolCalls: result.toolCalls,
       bookedAppointment: result.bookedAppointment,
     };
+
+    if (assistantTurn.audioUrl) turnAudioCache.remember(assistantTurn.id, assistantTurn.audioUrl);
 
     if (result.bookedAppointment?.appointment_id) {
       rememberPatientAppointmentReference(result.bookedAppointment.appointment_id);
@@ -569,8 +599,12 @@ export const MediVoiceChatExperience: React.FC<MediVoiceChatExperienceProps> = (
         await refreshOperationalData();
       }
 
-      // Requirement 3: Automatically convert final booking response into speech via Timbre TTS
-      if (isBookingDone && !showVoicePanel) {
+      // Speak the final confirmation prompt as well as the completed booking response.
+      if (shouldAutoSpeakChatTurn({
+        isBookingDone,
+        requiresConfirmation: assistantTurn.requiresConfirmation === true,
+        voicePanelOpen: showVoicePanel,
+      })) {
         void handlePlayTurnSpeech(assistantTurn);
       }
     } catch (err) {
