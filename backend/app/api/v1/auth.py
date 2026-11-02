@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, status
 
 from app.core.security import (
     SYNTHETIC_STAFF_ACCOUNTS,
+    is_demo_staff_auth_allowed,
     StaffRole,
     authenticate_staff,
     create_staff_token,
@@ -35,6 +36,8 @@ def _workspace_for_role(role: str) -> str:
 )
 def list_demo_staff_accounts():
     """Returns synthetic staff profiles without credentials."""
+    if not is_demo_staff_auth_allowed():
+        return []
     results: List[DemoStaffAccountRead] = []
     for acc in SYNTHETIC_STAFF_ACCOUNTS.values():
         role_val = acc["role"] or StaffRole.DOCTOR.value

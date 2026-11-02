@@ -7,6 +7,20 @@ import time
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
 from fastapi import Depends, Header, HTTPException, Request, status
+from app.core.config import settings
+
+
+def is_demo_staff_auth_allowed() -> bool:
+    """
+    Synthetic demo staff authentication is permitted in non-production environments,
+    or in production ONLY when ENABLE_DEMO_STAFF_AUTH=true is explicitly set.
+    """
+    env = (os.getenv("ENVIRONMENT") or getattr(settings, "ENVIRONMENT", "development")).strip().lower()
+    if env in ("prod", "production"):
+        return os.getenv("ENABLE_DEMO_STAFF_AUTH", "").strip().lower() in ("true", "1", "yes") or bool(
+            getattr(settings, "ENABLE_DEMO_STAFF_AUTH", False)
+        )
+    return True
 
 
 class StaffRole(str, Enum):
@@ -160,6 +174,17 @@ def verify_staff_token(token: str) -> Dict[str, Optional[str]]:
 
 def authenticate_staff(username: str, password: str) -> Dict[str, Optional[str]]:
     """Authenticates a synthetic staff account using both username and password."""
+    if not is_demo_staff_auth_allowed():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "DEMO_AUTH_DISABLED",
+                "message": (
+                    "Synthetic staff authentication is disabled in production environments. "
+                    "Set ENABLE_DEMO_STAFF_AUTH=true to enable demo staff access."
+                ),
+            },
+        )
     clean_user = (username or "").strip().lower()
     account = SYNTHETIC_STAFF_ACCOUNTS.get(clean_user)
     if not account:

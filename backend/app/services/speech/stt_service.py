@@ -292,8 +292,16 @@ class GnaniPrismaSTT:
             or os.getenv("TESTING", "").lower() in ("1", "true")
         )
 
-        # In mock mode (no key configured) or explicit offline automated test without mock HTTP client
-        if not self.is_live_configured or (self.http_client is None and is_automated_test):
+        is_production = (os.getenv("ENVIRONMENT") or getattr(settings, "ENVIRONMENT", "development")).strip().lower() in ("prod", "production")
+        if not self.is_live_configured:
+            if is_production and not is_automated_test:
+                raise SpeechServiceError(
+                    code="STT_PROVIDER_NOT_CONFIGURED",
+                    safe_message="Speech-to-text service is unconfigured in production. GNANI_API_KEY is required.",
+                    status_code=503,
+                )
+            return self._mock_transcribe(audio_bytes, gnani_lang)
+        if self.http_client is None and is_automated_test:
             return self._mock_transcribe(audio_bytes, gnani_lang)
 
         url = f"{self.api_base}/stt/v3"

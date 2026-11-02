@@ -1,9 +1,9 @@
 from typing import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
-from app.core.config import settings
+from app.core.config import settings, normalize_database_url
 
-db_url = settings.DATABASE_URL
+db_url = normalize_database_url(settings.DATABASE_URL)
 
 # Engine configuration for SQLite's thread behavior.
 connect_args = {}
@@ -27,4 +27,3 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
-

@@ -12720,32 +12720,33 @@ def create_reasoning_adapter(
 
     ).strip().lower()
 
-    if chosen == "mock":
+    is_prod = (os.getenv("ENVIRONMENT") or getattr(settings, "ENVIRONMENT", "development")).strip().lower() in ("prod", "production")
+    is_test = bool(os.getenv("PYTEST_CURRENT_TEST"))
+    fallback_allowed = bool(os.getenv("GEMINI_ENABLE_FALLBACK", "").strip().lower() in ("true", "1", "yes") or getattr(settings, "GEMINI_ENABLE_FALLBACK", False))
 
+    if chosen == "mock":
+        if is_prod and not is_test and not fallback_allowed:
+            raise RuntimeError("MockReasoningAdapter is disabled in production unless GEMINI_ENABLE_FALLBACK=true.")
         return MockReasoningAdapter()
 
     if chosen == "gemini":
-
         resolved_key = api_key if api_key is not None else (os.getenv("GEMINI_API_KEY") or settings.GEMINI_API_KEY or "")
-
         if not resolved_key.strip():
-
+            if is_prod and not is_test and not fallback_allowed:
+                raise RuntimeError("GEMINI_API_KEY must be configured in production when fallback is disabled.")
             return MockReasoningAdapter()
-
         return GeminiReasoningAdapter(api_key=resolved_key, model=model)
 
     # 'auto' mode: use MockReasoningAdapter under pytest unless explicitly overridden
-
-    if os.getenv("PYTEST_CURRENT_TEST"):
-
+    if is_test:
         return MockReasoningAdapter()
 
     resolved_key = (api_key if api_key is not None else (os.getenv("GEMINI_API_KEY") or settings.GEMINI_API_KEY or "")).strip()
-
     if resolved_key:
-
         return GeminiReasoningAdapter(api_key=resolved_key, model=model)
 
+    if is_prod and not fallback_allowed:
+        raise RuntimeError("GEMINI_API_KEY must be configured in production when fallback is disabled.")
     return MockReasoningAdapter()
 
 

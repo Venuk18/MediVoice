@@ -35,7 +35,24 @@ import {
   WorkflowExceptionRead,
 } from '../types/api';
 
-const API_BASE = '/api/v1';
+/**
+ * Resolves the API v1 base URL:
+ * - If VITE_API_BASE_URL is unset or empty, defaults to '/api/v1' (routed via Vite development proxy).
+ * - If VITE_API_BASE_URL is set (e.g. 'https://medivoice-backend.onrender.com'), appends '/api/v1'.
+ * - If VITE_API_BASE_URL already includes '/api/v1', normalizes it without double-prefixing.
+ */
+export function resolveApiBaseUrl(rawEnvUrl?: string): string {
+  const trimmed = (rawEnvUrl || '').trim().replace(/\/+$/, '');
+  if (!trimmed) {
+    return '/api/v1';
+  }
+  if (trimmed.endsWith('/api/v1')) {
+    return trimmed;
+  }
+  return trimmed + '/api/v1';
+}
+
+const API_BASE = resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL);
 
 export class ApiError extends Error {
   status: number;

@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
@@ -44,5 +45,8 @@ def root_health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="127.0.0.1", port=8001, reload=True)
 
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8001"))
+    reload = os.getenv("ENVIRONMENT", settings.ENVIRONMENT).lower() not in ("production", "prod")
+    uvicorn.run("app.main:app", host=host, port=port, reload=reload)

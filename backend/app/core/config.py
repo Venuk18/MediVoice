@@ -1,8 +1,8 @@
 import os
 from pathlib import Path
-from typing import List
+from typing import Any, List
 from dotenv import load_dotenv
-from pydantic import ConfigDict
+from pydantic import ConfigDict, field_validator
 try:
     from pydantic_settings import BaseSettings
 except ImportError:
@@ -14,6 +14,23 @@ if _backend_env.exists():
     load_dotenv(dotenv_path=_backend_env)
 else:
     load_dotenv()
+
+
+def normalize_database_url(url: str) -> str:
+    """Normalizes database connection URLs for PostgreSQL and SQLite.
+
+    Render Managed PostgreSQL supplies connection URLs starting with 'postgres://',
+    which SQLAlchemy 2.0 rejects. This converts them to 'postgresql+psycopg2://'
+    to match the installed psycopg2 driver.
+    """
+    if not url:
+        return url
+    trimmed = url.strip()
+    if trimmed.startswith("postgres://"):
+        return trimmed.replace("postgres://", "postgresql+psycopg2://", 1)
+    if trimmed.startswith("postgresql://") and not trimmed.startswith("postgresql+"):
+        return trimmed.replace("postgresql://", "postgresql+psycopg2://", 1)
+    return trimmed
 
 
 # Default database path resolved to backend/medivoice.db if it exists
@@ -32,7 +49,7 @@ class Settings(BaseSettings):
     DEFAULT_HOSPITAL_ID: str = "11111111-1111-1111-1111-111111111111"
 
     # Local development works out of the box. Set DATABASE_URL to PostgreSQL in deployment.
-    DATABASE_URL: str = os.getenv("DATABASE_URL", _default_db_url)
+    DATABASE_URL: str = normalize_database_url(os.getenv("DATABASE_URL", _default_db_url))
 
     # AI Reasoning Provider Configuration (Backend-only; never exposed to client)
     AI_PROVIDER: str = os.getenv("AI_PROVIDER", os.getenv("LLM_PROVIDER", "mock"))
@@ -65,6 +82,9 @@ class Settings(BaseSettings):
     LAB_VERIFICATION_RATE_LIMIT_MAX_ATTEMPTS: int = int(os.getenv("LAB_VERIFICATION_RATE_LIMIT_MAX_ATTEMPTS", "5"))
     LAB_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS: int = int(os.getenv("LAB_VERIFICATION_RATE_LIMIT_WINDOW_SECONDS", "300"))
 
+    # Security & Synthetic Staff Auth
+    ENABLE_DEMO_STAFF_AUTH: bool = os.getenv("ENABLE_DEMO_STAFF_AUTH", "false").lower() in ("true", "1", "yes")
+
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
@@ -75,8 +95,34 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3001",
     ]
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def assemble_database_url(cls, v: Any) -> str:
+        if isinstance(v, str):
+            return normalize_database_url(v)
+        return str(v)
+
+    @field_validator("BACKEND_CORS_ORIGINS", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: Any) -> List[str]:
+        if isinstance(v, str):
+            v_stripped = v.strip()
+            if not v_stripped:
+                return []
+            if v_stripped.startswith("[") and v_stripped.endswith("]"):
+                try:
+                    import json
+                    parsed = json.loads(v_stripped)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except Exception:
+                    pass
+            return [part.strip() for part in v_stripped.split(",") if part.strip()]
+        elif isinstance(v, (list, tuple)):
+            return [str(item).strip() for item in v if str(item).strip()]
+        return v
+
     model_config = ConfigDict(extra="ignore", case_sensitive=True)
 
 
 settings = Settings()
-

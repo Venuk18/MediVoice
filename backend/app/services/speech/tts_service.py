@@ -297,9 +297,22 @@ class GnaniTimbreTTS:
             or os.getenv("TESTING", "").lower() in ("1", "true")
         )
 
-        # If live credentials are missing or in offline automated test mode (without an explicit mock HTTP client), return playable synthetic WAV
-        if not self.is_live_configured or (self.http_client is None and is_automated_test):
-            # Duration approximates word count (150 words per minute ~ 2.5 words per second)
+        is_production = (os.getenv("ENVIRONMENT") or getattr(settings, "ENVIRONMENT", "development")).strip().lower() in ("prod", "production")
+        if not self.is_live_configured:
+            if is_production and not is_automated_test:
+                raise SpeechServiceError(
+                    code="TTS_PROVIDER_NOT_CONFIGURED",
+                    safe_message="Text-to-speech service is unconfigured in production. GNANI_API_KEY is required.",
+                    status_code=503,
+                )
+            word_count = len(cleaned_text.split())
+            approx_duration = max(0.5, min(word_count / 2.5, 4.0))
+            synth_audio = generate_synthetic_wav(duration_seconds=approx_duration, frequency=523.25)
+            if cache_key:
+                _GREETING_AUDIO_CACHE[cache_key] = synth_audio
+            return synth_audio
+
+        if self.http_client is None and is_automated_test:
             word_count = len(cleaned_text.split())
             approx_duration = max(0.5, min(word_count / 2.5, 4.0))
             synth_audio = generate_synthetic_wav(duration_seconds=approx_duration, frequency=523.25)
