@@ -358,3 +358,37 @@ export interface AgentConfigRead {
   supported_languages: SupportedLanguage[];
   approved_tools: string[];
 }
+
+
+export interface VoiceToolExecutionResult {
+  tool_name: string;
+  arguments?: Record<string, any>;
+  success?: boolean;
+  result?: any;
+  error?: string | null;
+  [key: string]: any;
+}
+
+export interface VoiceTurnResponse {
+  correlation_id?: string;
+  transcript: string;
+  detected_language: string;
+  gnani_stt_language?: string | null;
+  session_id: string;
+  reply: string;
+  assistant_reply?: string;
+  language: string;
+  step: string;
+  conversation_step?: string;
+  confirmation_status: string;
+  requires_confirmation?: boolean;
+  draft: BookingDraftState;
+  tool_trace: VoiceToolExecutionResult[];
+  tool_calls?: VoiceToolExecutionResult[];
+  audio_base64?: string | null;
+  audio_content_type?: string | null;
+  tts_available: boolean;
+  tts_error?: string | null;
+  timings?: Record<string, number> | null;
+  booked_appointment?: Record<string, any> | null;
+}

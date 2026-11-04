@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Code2,
   Globe,
+  Loader2,
   Mic,
   MicOff,
   RotateCcw,
@@ -94,6 +95,16 @@ const QUICK_SCENARIO_PROMPTS: Array<{
   },
 ];
 
+function base64ToBlob(base64: string, mimeType = 'audio/wav'): Blob {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: mimeType });
+}
+
 export const MediVoiceChatPanel: React.FC = () => {
   const { activePatientRef, setActivePatientRef, agentConfig, refreshOperationalData } =
     usePlatform();
@@ -122,82 +133,278 @@ export const MediVoiceChatPanel: React.FC = () => {
   const [bookedResult, setBookedResult] = useState<Record<string, unknown> | null>(null);
   const [showInspector, setShowInspector] = useState<boolean>(false);
 
-  // Conditional Web Speech API Voice Input & Output
+  // Gnani AI Voice Pipeline State & Refs
   const [speechSupported, setSpeechSupported] = useState<boolean>(false);
-  const [ttsSupported, setTtsSupported] = useState<boolean>(false);
   const [isListening, setIsListening] = useState<boolean>(false);
-  const [ttsEnabled, setTtsEnabled] = useState<boolean>(false);
-  const recognitionRef = useRef<{ stop: () => void } | null>(null);
+  const [isProcessingVoice, setIsProcessingVoice] = useState<boolean>(false);
+  const [ttsEnabled, setTtsEnabled] = useState<boolean>(true);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const currentAudioUrlRef = useRef<string | null>(null);
+  const correlationIdRef = useRef<string>('');
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const win = window as unknown as Record<string, unknown>;
-    const hasRecognition = Boolean(win.SpeechRecognition || win.webkitSpeechRecognition);
-    setSpeechSupported(hasRecognition);
-    setTtsSupported(typeof window !== 'undefined' && 'speechSynthesis' in window);
+    const hasMedia = Boolean(
+      typeof navigator !== 'undefined' &&
+      navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getUserMedia === 'function' &&
+      typeof MediaRecorder !== 'undefined'
+    );
+    setSpeechSupported(hasMedia);
   }, []);
 
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }, [messages, isSending]);
+  }, [messages, isSending, isProcessingVoice]);
 
-  const speakAssistantReply = (text: string, lang: SupportedLanguage) => {
-    if (!ttsEnabled || !ttsSupported || typeof window === 'undefined') return;
+  // Clean up recording and playback resources on unmount
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try {
+          mediaRecorderRef.current.stop();
+        } catch {
+          // ignore
+        }
+        mediaRecorderRef.current = null;
+      }
+      if (audioStreamRef.current) {
+        audioStreamRef.current.getTracks().forEach((track) => track.stop());
+        audioStreamRef.current = null;
+      }
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+        audioPlayerRef.current = null;
+      }
+      if (currentAudioUrlRef.current) {
+        URL.revokeObjectURL(currentAudioUrlRef.current);
+        currentAudioUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  const playAudioBlob = (blob: Blob) => {
     try {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = LANGUAGE_META[lang]?.speechLang || 'en-IN';
-      utterance.rate = 1.0;
-      window.speechSynthesis.speak(utterance);
-    } catch {
-      // Ignore synthesis errors
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+        audioPlayerRef.current = null;
+      }
+      if (currentAudioUrlRef.current) {
+        URL.revokeObjectURL(currentAudioUrlRef.current);
+        currentAudioUrlRef.current = null;
+      }
+      const url = URL.createObjectURL(blob);
+      currentAudioUrlRef.current = url;
+      const audio = new Audio(url);
+      audioPlayerRef.current = audio;
+      audio.onended = () => {
+        if (currentAudioUrlRef.current === url) {
+          URL.revokeObjectURL(url);
+          currentAudioUrlRef.current = null;
+        }
+        if (audioPlayerRef.current === audio) {
+          audioPlayerRef.current = null;
+        }
+      };
+      audio.onerror = () => {
+        if (currentAudioUrlRef.current === url) {
+          URL.revokeObjectURL(url);
+          currentAudioUrlRef.current = null;
+        }
+        if (audioPlayerRef.current === audio) {
+          audioPlayerRef.current = null;
+        }
+      };
+      void audio.play().catch((err) => {
+        console.warn('Audio playback error or deferred by browser:', err);
+      });
+    } catch (err) {
+      console.warn('Failed to play audio:', err);
     }
   };
 
-  const toggleVoiceInput = () => {
+  const speakAssistantReply = async (text: string, lang: SupportedLanguage) => {
+    if (!ttsEnabled) return;
+    try {
+      const blob = await medivoiceApi.synthesizeSpeech(text, lang);
+      playAudioBlob(blob);
+    } catch (err) {
+      console.warn('Gnani Timbre speech synthesis failed:', err);
+    }
+  };
+
+  const toggleVoiceInput = async () => {
     if (!speechSupported) return;
-    if (isListening && recognitionRef.current) {
-      recognitionRef.current.stop();
-      setIsListening(false);
+    if (isListening) {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        try {
+          mediaRecorderRef.current.stop();
+        } catch {
+          // ignore
+        }
+      }
       return;
     }
 
-    const win = window as unknown as Record<
-      string,
-      new () => {
-        lang: string;
-        interimResults: boolean;
-        maxAlternatives: number;
-        onresult: (event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void;
-        onerror: () => void;
-        onend: () => void;
-        start: () => void;
-        stop: () => void;
-      }
-    >;
-    const SpeechRec = win.SpeechRecognition || win.webkitSpeechRecognition;
-    if (!SpeechRec) return;
-
+    setVoiceError(null);
     try {
-      const recognition = new SpeechRec();
-      recognition.lang = LANGUAGE_META[activeLanguage]?.speechLang || 'en-IN';
-      recognition.interimResults = false;
-      recognition.maxAlternatives = 1;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      audioStreamRef.current = stream;
 
-      recognition.onresult = (event) => {
-        const transcript = event.results?.[0]?.[0]?.transcript;
-        if (transcript) {
-          setInput((prev) => (prev ? `${prev} ${transcript}` : transcript));
+      let mimeType = 'audio/webm';
+      if (typeof MediaRecorder.isTypeSupported === 'function') {
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+          mimeType = 'audio/webm;codecs=opus';
+        } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+          mimeType = 'audio/ogg;codecs=opus';
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          mimeType = 'audio/mp4';
+        }
+      }
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
         }
       };
-      recognition.onerror = () => setIsListening(false);
-      recognition.onend = () => setIsListening(false);
 
-      recognitionRef.current = recognition;
+      mediaRecorder.onstop = async () => {
+        setIsListening(false);
+        if (audioStreamRef.current) {
+          audioStreamRef.current.getTracks().forEach((track) => track.stop());
+          audioStreamRef.current = null;
+        }
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        audioChunksRef.current = [];
+
+        if (audioBlob.size < 500) {
+          setVoiceError('Speech recording was too short. Please speak clearly into your microphone.');
+          return;
+        }
+
+        setIsProcessingVoice(true);
+        const nowLabel = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const correlationId =
+          typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        correlationIdRef.current = correlationId;
+
+        try {
+          const response = await medivoiceApi.sendVoiceTurn(audioBlob, {
+            sessionId,
+            patientReference: activePatientRef,
+            language: activeLanguage,
+            correlationId,
+          });
+
+          const userTranscript = (response.transcript || '').trim();
+          const assistantReply = (response.assistant_reply || response.reply || '').trim();
+
+          if (userTranscript) {
+            const userMsg: ChatMessageItem = {
+              id: `user-${Date.now()}`,
+              role: 'user',
+              content: userTranscript,
+              timestamp: nowLabel,
+            };
+            setMessages((prev) => [...prev, userMsg]);
+          }
+
+          setSessionId(response.session_id);
+          if (response.language) {
+            setActiveLanguage(response.language as SupportedLanguage);
+          }
+          setConversationStep(response.conversation_step || response.step);
+          setConfirmationStatus(response.confirmation_status);
+          setRequiresConfirmation(Boolean(response.requires_confirmation));
+          setDraft(response.draft);
+
+          if (response.tool_calls && response.tool_calls.length > 0) {
+            setToolTraces((prev) => [...(response.tool_calls as ToolCallTrace[]), ...prev].slice(0, 20));
+          }
+
+          if (response.booked_appointment) {
+            setBookedResult(response.booked_appointment);
+            await refreshOperationalData();
+          }
+
+          const assistantMsg: ChatMessageItem = {
+            id: `assistant-${Date.now()}`,
+            role: 'assistant',
+            content: assistantReply,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            step: response.conversation_step || response.step,
+            requiresConfirmation: Boolean(response.requires_confirmation),
+          };
+          setMessages((prev) => [...prev, assistantMsg]);
+
+          if (response.audio_base64 && ttsEnabled) {
+            const audioOut = base64ToBlob(
+              response.audio_base64,
+              response.audio_content_type || 'audio/wav'
+            );
+            playAudioBlob(audioOut);
+          }
+        } catch (err: unknown) {
+          console.error('Voice turn processing error:', err);
+          let safeMessage = 'Voice processing failed. Please try speaking again or use text chat.';
+          if (err instanceof ApiError) {
+            if (err.status === 422) {
+              safeMessage = 'No clear speech was recognized in the audio. Please speak clearly into your microphone.';
+            } else if (err.status === 502) {
+              safeMessage = 'Gnani voice service temporarily unavailable. You can continue via text chat.';
+            } else if (err.status === 504 || err.status === 408) {
+              safeMessage = 'Voice request timed out. Please try speaking again.';
+            } else {
+              safeMessage = err.message || safeMessage;
+            }
+          }
+          setVoiceError(safeMessage);
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `err-${Date.now()}`,
+              role: 'assistant',
+              content: safeMessage,
+              timestamp: nowLabel,
+              isError: true,
+            },
+          ]);
+        } finally {
+          setIsProcessingVoice(false);
+        }
+      };
+
+      mediaRecorder.start(200);
       setIsListening(true);
-      recognition.start();
-    } catch {
+    } catch (err: unknown) {
+      console.error('Microphone initialization error:', err);
       setIsListening(false);
+      const errName = (err as { name?: string })?.name;
+      if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
+        setVoiceError('Microphone permission was denied. Please allow microphone access in your browser address bar.');
+      } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
+        setVoiceError('No microphone was found. Please connect a microphone and try again.');
+      } else {
+        setVoiceError('Failed to access microphone. Please check your browser audio settings.');
+      }
     }
   };
 
@@ -251,7 +458,7 @@ export const MediVoiceChatPanel: React.FC = () => {
         requiresConfirmation: response.requires_confirmation,
       };
       setMessages((prev) => [...prev, assistantMsg]);
-      speakAssistantReply(response.assistant_reply, response.language);
+      void speakAssistantReply(response.assistant_reply, response.language);
     } catch (err) {
       const errMessage =
         err instanceof ApiError
@@ -286,6 +493,7 @@ export const MediVoiceChatPanel: React.FC = () => {
     setDraft({ patient_reference: activePatientRef });
     setToolTraces([]);
     setBookedResult(null);
+    setVoiceError(null);
     setMessages([
       {
         id: `reset-${Date.now()}`,
@@ -318,7 +526,7 @@ export const MediVoiceChatPanel: React.FC = () => {
                 </span>
               </div>
               <p className="text-xs text-[#94A3B8]">
-                Allowlisted tool router • Explicit booking confirmation • 5 Indian languages
+                Gnani Prisma STT • Gnani Timbre TTS • Explicit booking confirmation • 5 Indian languages
               </p>
             </div>
           </div>
@@ -333,10 +541,12 @@ export const MediVoiceChatPanel: React.FC = () => {
                 <span
                   key={idx}
                   style={{
-                    height: isSending || isListening ? `${height}px` : '8px',
+                    height: isSending || isListening || isProcessingVoice ? `${height}px` : '8px',
                   }}
                   className={`w-1 rounded-full transition-all duration-300 ${
                     isListening
+                      ? 'bg-rose-400 animate-pulse'
+                      : isProcessingVoice
                       ? 'bg-[#2DD4BF] animate-pulse'
                       : isSending
                       ? 'bg-[#38BDF8] animate-pulse'
@@ -345,24 +555,22 @@ export const MediVoiceChatPanel: React.FC = () => {
                 />
               ))}
               <span className="ml-1.5 font-mono text-[10px] text-[#94A3B8]">
-                {isListening ? 'LISTENING' : isSending ? 'ROUTING' : 'READY'}
+                {isListening ? 'RECORDING' : isProcessingVoice ? 'GNANI AI' : isSending ? 'ROUTING' : 'READY'}
               </span>
             </div>
 
-            {ttsSupported && (
-              <button
-                type="button"
-                onClick={() => setTtsEnabled((prev) => !prev)}
-                title={ttsEnabled ? 'Mute voice readout' : 'Enable voice readout'}
-                className={`rounded-lg border p-2 text-xs transition-colors ${
-                  ttsEnabled
-                    ? 'border-[#2DD4BF] bg-[#2DD4BF]/15 text-[#2DD4BF]'
-                    : 'border-[#334155] bg-[#111B2E] text-[#94A3B8] hover:text-[#E5EDF7]'
-                }`}
-              >
-                {ttsEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => setTtsEnabled((prev) => !prev)}
+              title={ttsEnabled ? 'Mute voice readout' : 'Enable voice readout (Gnani Timbre TTS)'}
+              className={`rounded-lg border p-2 text-xs transition-colors ${
+                ttsEnabled
+                  ? 'border-[#2DD4BF] bg-[#2DD4BF]/15 text-[#2DD4BF]'
+                  : 'border-[#334155] bg-[#111B2E] text-[#94A3B8] hover:text-[#E5EDF7]'
+              }`}
+            >
+              {ttsEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+            </button>
 
             <button
               type="button"
@@ -379,204 +587,197 @@ export const MediVoiceChatPanel: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => void handleResetSession()}
+              onClick={handleResetSession}
               title="Reset conversation session"
-              className="flex items-center gap-1 rounded-lg border border-[#334155] bg-[#111B2E] px-2.5 py-1.5 text-xs text-[#94A3B8] transition-colors hover:border-rose-500/40 hover:text-rose-300"
+              className="rounded-lg border border-[#334155] bg-[#111B2E] p-2 text-xs text-[#94A3B8] hover:border-rose-500/50 hover:text-rose-400 transition-colors"
             >
-              <RotateCcw className="h-3.5 w-3.5" />
-              <span className="hidden md:inline">Reset</span>
+              <RotateCcw className="h-4 w-4" />
             </button>
           </div>
         </div>
 
-        {/* Patient Context & Quick Language Switcher Bar */}
+        {/* Operational Context Sub-bar */}
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[#334155]/60 pt-3 text-xs">
           <div className="flex items-center gap-2">
-            <span className="text-[#94A3B8]">Patient ID:</span>
+            <span className="text-[#94A3B8]">Patient Ref:</span>
             <input
               type="text"
               aria-label="Synthetic Patient Reference"
               value={activePatientRef}
               onChange={(e) => setActivePatientRef(e.target.value)}
-              className="w-36 rounded border border-[#334155] bg-[#111B2E] px-2 py-1 font-mono text-xs text-[#2DD4BF] focus:border-[#2DD4BF] focus:outline-none"
+              placeholder="e.g. PAT-2024-9182"
+              className="w-36 rounded-md border border-[#334155] bg-[#111B2E] px-2 py-0.5 font-mono text-xs text-[#E5EDF7] focus:border-[#2DD4BF] focus:outline-none"
             />
-            <span className="hidden sm:inline font-mono text-[11px] text-[#94A3B8]">
-              Step: <strong className="text-[#E5EDF7]">{conversationStep}</strong>
-            </span>
           </div>
 
-          <div className="flex items-center gap-1">
-            <Globe className="h-3.5 w-3.5 text-[#38BDF8] mr-1" />
-            {(['en', 'te', 'ta', 'kn', 'hi'] as SupportedLanguage[]).map((langCode) => (
-              <button
-                key={langCode}
-                type="button"
-                onClick={() => void handleSendMessage(LANGUAGE_META[langCode].samplePrompt)}
-                className={`rounded px-2 py-0.5 font-mono text-[11px] transition-colors ${
-                  activeLanguage === langCode
-                    ? 'bg-[#2DD4BF]/20 text-[#2DD4BF] border border-[#2DD4BF]/40'
-                    : 'text-[#94A3B8] hover:bg-[#111B2E] hover:text-[#E5EDF7]'
+          <div className="flex items-center gap-3 text-[11px]">
+            <div className="flex items-center gap-1">
+              <span className="text-[#94A3B8]">Step:</span>
+              <span className="font-mono font-semibold text-[#38BDF8]">{conversationStep}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-[#94A3B8]">Confirmation:</span>
+              <span
+                className={`font-mono font-semibold ${
+                  confirmationStatus === 'CONFIRMED'
+                    ? 'text-emerald-400'
+                    : confirmationStatus === 'PENDING'
+                    ? 'text-amber-400'
+                    : 'text-[#94A3B8]'
                 }`}
               >
-                {langCode.toUpperCase()}
-              </button>
-            ))}
+                {confirmationStatus}
+              </span>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Collapsible Session Draft & Tool Router Trace Drawer */}
-      {showInspector && (
-        <div className="border-b border-[#334155] bg-[#0B1020]/95 px-5 py-3.5 text-xs space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="font-mono font-semibold text-[#38BDF8]">
-              SESSION DRAFT & ALLOWLISTED TOOL ROUTER
-            </span>
-            {agentConfig && (
-              <span className="font-mono text-[11px] text-[#94A3B8]">
-                Adapter: {agentConfig.adapter_class}
-              </span>
-            )}
+      {/* Voice Warning Banner */}
+      {voiceError && (
+        <div className="bg-rose-500/10 border-b border-rose-500/30 px-5 py-2.5 text-xs text-rose-300 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+            <span>{voiceError}</span>
           </div>
-
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5 font-mono text-[11px]">
-            <div className="rounded border border-[#334155] bg-[#111B2E] p-2">
-              <span className="block text-[10px] text-[#94A3B8]">SPECIALTY</span>
-              <span className="text-[#E5EDF7]">{draft.specialty_or_department || '—'}</span>
-            </div>
-            <div className="rounded border border-[#334155] bg-[#111B2E] p-2">
-              <span className="block text-[10px] text-[#94A3B8]">DOCTOR</span>
-              <span className="text-[#E5EDF7]">{draft.selected_doctor_name || '—'}</span>
-            </div>
-            <div className="rounded border border-[#334155] bg-[#111B2E] p-2">
-              <span className="block text-[10px] text-[#94A3B8]">SLOT</span>
-              <span className="text-[#E5EDF7]">{draft.selected_slot_id || '—'}</span>
-            </div>
-            <div className="rounded border border-[#334155] bg-[#111B2E] p-2">
-              <span className="block text-[10px] text-[#94A3B8]">REASON</span>
-              <span className="text-[#E5EDF7] truncate block">{draft.reason_category || '—'}</span>
-            </div>
-            <div className="rounded border border-[#334155] bg-[#111B2E] p-2">
-              <span className="block text-[10px] text-[#94A3B8]">CONFIRMATION</span>
-              <span className="text-[#2DD4BF]">{confirmationStatus}</span>
-            </div>
-          </div>
-
-          {toolTraces.length > 0 && (
-            <div className="max-h-32 overflow-y-auto space-y-1.5 border-t border-[#334155]/60 pt-2">
-              {toolTraces.map((trace, i) => (
-                <div
-                  key={`${trace.tool_name}-${i}`}
-                  className="flex items-center justify-between rounded border border-[#334155]/80 bg-[#111B2E] px-2.5 py-1.5 font-mono text-[11px]"
-                >
-                  <span className="text-[#38BDF8]">{trace.tool_name}</span>
-                  <span className={trace.success ? 'text-emerald-400' : 'text-rose-400'}>
-                    {trace.success ? 'SUCCESS' : trace.error || 'FAILED'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
+          <button
+            type="button"
+            onClick={() => setVoiceError(null)}
+            className="text-rose-400 hover:text-rose-200 text-xs font-semibold"
+          >
+            Dismiss
+          </button>
         </div>
       )}
 
-      {/* Conversation Transcript */}
-      <div className="h-[380px] overflow-y-auto px-5 py-4 space-y-3.5 bg-[#0B1020]/50">
+      {/* State Inspector Drawer */}
+      {showInspector && (
+        <div className="border-b border-[#334155] bg-[#0B1020] p-4 text-xs font-mono text-[#94A3B8] space-y-3">
+          <div className="flex items-center justify-between text-[#E5EDF7]">
+            <span className="font-bold uppercase tracking-wider text-[11px] text-[#2DD4BF]">
+              Reasoning State & Extracted Draft
+            </span>
+            <span>Session: {sessionId}</span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="rounded-lg border border-[#334155] bg-[#111B2E] p-3 space-y-1">
+              <span className="text-[#38BDF8] font-semibold block mb-1">Extracted Booking Draft:</span>
+              <pre className="text-[11px] overflow-x-auto text-[#E5EDF7]">
+                {JSON.stringify(draft, null, 2)}
+              </pre>
+            </div>
+
+            <div className="rounded-lg border border-[#334155] bg-[#111B2E] p-3 space-y-1">
+              <span className="text-[#38BDF8] font-semibold block mb-1">
+                Recent Allowlisted Tool Executions:
+              </span>
+              <div className="max-h-32 overflow-y-auto space-y-1 text-[11px]">
+                {toolTraces.length === 0 ? (
+                  <span className="text-[#64748B]">No tool executions in this turn yet.</span>
+                ) : (
+                  toolTraces.map((trace, i) => (
+                    <div key={i} className="flex items-center justify-between border-b border-[#334155]/40 py-0.5">
+                      <span className="text-emerald-400">{trace.tool_name}</span>
+                      <span className="text-[#64748B]">
+                        {trace.success ? '✓ SUCCESS' : `✗ ${trace.error || 'FAILED'}`}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Chat Messages Timeline */}
+      <div className="h-96 overflow-y-auto p-5 space-y-4">
         {messages.map((msg) => {
           const isUser = msg.role === 'user';
           return (
             <div
               key={msg.id}
-              className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
+              className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} space-y-1`}
             >
-              <div
-                className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                  isUser
-                    ? 'bg-[#2DD4BF] text-[#0B1020] font-medium'
-                    : msg.isError
-                    ? 'border border-rose-500/50 bg-rose-500/10 text-rose-200'
-                    : 'border border-[#334155] bg-[#111B2E] text-[#E5EDF7]'
-                }`}
-              >
-                <p className="whitespace-pre-wrap">{msg.content}</p>
-              </div>
-              <div className="mt-1 flex items-center gap-2 px-1 font-mono text-[10px] text-[#94A3B8] tabular-nums">
+              <div className="flex items-center gap-2 text-[11px] text-[#94A3B8]">
                 <span>{isUser ? `Patient (${activePatientRef})` : 'MediVoice AI'}</span>
                 <span>•</span>
                 <span>{msg.timestamp}</span>
+              </div>
+
+              <div
+                className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                  isUser
+                    ? 'bg-[#2DD4BF] text-[#0B1020] font-medium rounded-br-none shadow-md'
+                    : msg.isError
+                    ? 'border border-rose-500/40 bg-rose-500/10 text-rose-200 rounded-bl-none'
+                    : 'border border-[#334155] bg-[#1E293B] text-[#E5EDF7] rounded-bl-none shadow-md'
+                }`}
+              >
+                <div className="whitespace-pre-wrap">{msg.content}</div>
+
+                {msg.requiresConfirmation && (
+                  <div className="mt-2.5 flex items-center gap-1.5 rounded-lg border border-amber-400/40 bg-amber-400/10 px-2.5 py-1 text-xs text-amber-200">
+                    <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                    <span>Explicit booking confirmation required before reserving slot.</span>
+                  </div>
+                )}
               </div>
             </div>
           );
         })}
 
         {isSending && (
-          <div className="flex items-center gap-2.5 text-xs text-[#94A3B8] font-mono">
-            <span className="h-2 w-2 rounded-full bg-[#2DD4BF] animate-ping" />
+          <div className="flex items-center gap-2 text-xs text-[#38BDF8] animate-pulse">
+            <Bot className="h-4 w-4 animate-spin" />
             <span>MediVoice AI is querying hospital backend tools...</span>
           </div>
         )}
+
+        {isProcessingVoice && (
+          <div className="flex items-center gap-2 text-xs text-[#2DD4BF] animate-pulse">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>Processing voice recording via Gnani Prisma STT & AI Reasoning...</span>
+          </div>
+        )}
+
         <div ref={transcriptEndRef} />
       </div>
 
-      {/* Explicit Confirmation Banner when Agent Awaits Patient Confirmation */}
-      {requiresConfirmation && (
-        <div className="border-t border-[#2DD4BF]/40 bg-[#2DD4BF]/10 px-5 py-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-xs text-[#E5EDF7]">
-            <ShieldCheck className="h-4 w-4 text-[#2DD4BF] shrink-0" />
-            <span>
-              <strong>Explicit Patient Confirmation Required:</strong> Confirm to commit slot{' '}
-              <span className="font-mono text-[#2DD4BF]">{draft.selected_slot_id}</span> with{' '}
-              <strong>{draft.selected_doctor_name}</strong>.
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={isSending}
-              onClick={() => void handleSendMessage('Yes, confirm booking')}
-              className="rounded-lg bg-[#2DD4BF] px-3 py-1.5 text-xs font-semibold text-[#0B1020] hover:bg-[#2DD4BF]/90 disabled:opacity-50"
-            >
-              Confirm Booking
-            </button>
-            <button
-              type="button"
-              disabled={isSending}
-              onClick={() => void handleSendMessage('No, cancel')}
-              className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/20 disabled:opacity-50"
-            >
-              Cancel Draft
-            </button>
-          </div>
+      {/* Language Quick Selector & Multilingual Samples */}
+      <div className="border-t border-[#334155] bg-[#0B1020]/60 px-5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="flex items-center gap-1.5 text-[#94A3B8]">
+          <Globe className="h-3.5 w-3.5 text-[#38BDF8]" />
+          <span>Active Language:</span>
         </div>
-      )}
 
-      {/* Committed Booking Receipt Banner */}
-      {bookedResult && (
-        <div className="border-t border-emerald-500/40 bg-emerald-500/10 px-5 py-2.5 flex items-center justify-between text-xs text-emerald-200">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
-            <span>
-              Appointment committed to database:{' '}
-              <strong className="font-mono">
-                {String(bookedResult.appointment_id || '').slice(0, 12)}...
-              </strong>{' '}
-              ({String(bookedResult.doctor_name || '')} • {String(bookedResult.slot_id || '')})
-            </span>
-          </div>
-          <span className="font-mono text-[10px] uppercase text-emerald-300">CONFIRMED</span>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {(Object.keys(LANGUAGE_META) as SupportedLanguage[]).map((langKey) => (
+            <button
+              key={langKey}
+              type="button"
+              onClick={() => setActiveLanguage(langKey)}
+              className={`rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${
+                activeLanguage === langKey
+                  ? 'border border-[#2DD4BF]/60 bg-[#2DD4BF]/20 text-[#2DD4BF]'
+                  : 'border border-[#334155] bg-[#111B2E] text-[#94A3B8] hover:text-[#E5EDF7]'
+              }`}
+            >
+              {LANGUAGE_META[langKey].label}
+            </button>
+          ))}
         </div>
-      )}
+      </div>
 
-      {/* Scenario Starter Prompts */}
-      <div className="border-t border-[#334155]/70 bg-[#0B1020]/80 px-5 py-2.5 flex items-center gap-2 overflow-x-auto">
-        <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-[#94A3B8]">
-          Try:
-        </span>
-        {QUICK_SCENARIO_PROMPTS.map((item) => (
+      {/* Quick Prompts Bar */}
+      <div className="border-t border-[#334155]/60 bg-[#0B1020]/40 px-5 py-2 flex items-center gap-2 overflow-x-auto text-xs">
+        <span className="shrink-0 font-mono text-[10px] uppercase text-[#64748B]">Quick Try:</span>
+        {QUICK_SCENARIO_PROMPTS.map((item, idx) => (
           <button
-            key={item.label}
+            key={idx}
             type="button"
-            disabled={isSending}
+            disabled={isSending || isListening || isProcessingVoice}
             onClick={() => void handleSendMessage(item.prompt)}
             className="shrink-0 rounded-lg border border-[#334155] bg-[#111B2E] px-2.5 py-1 text-xs text-[#E5EDF7] transition-colors hover:border-[#38BDF8] hover:text-[#38BDF8] disabled:opacity-50"
           >
@@ -596,29 +797,52 @@ export const MediVoiceChatPanel: React.FC = () => {
         {speechSupported && (
           <button
             type="button"
+            disabled={isProcessingVoice || isSending}
             onClick={toggleVoiceInput}
-            title={isListening ? 'Stop voice capture' : 'Speak in selected language'}
+            title={
+              isListening
+                ? 'Stop recording and process voice via Gnani AI'
+                : isProcessingVoice
+                ? 'Processing voice turn...'
+                : `Speak with Gnani AI in ${LANGUAGE_META[activeLanguage]?.label || activeLanguage}`
+            }
+            aria-label={isListening ? 'Stop recording' : 'Speak with Gnani AI'}
             className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border transition-all ${
               isListening
-                ? 'border-rose-500 bg-rose-500/20 text-rose-300 animate-pulse'
+                ? 'border-rose-500 bg-rose-500/20 text-rose-300 ring-2 ring-rose-400 animate-pulse'
+                : isProcessingVoice
+                ? 'border-[#2DD4BF] bg-[#2DD4BF]/20 text-[#2DD4BF] cursor-wait'
                 : 'border-[#334155] bg-[#111B2E] text-[#38BDF8] hover:border-[#38BDF8]'
-            }`}
+            } disabled:opacity-50`}
           >
-            {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+            {isProcessingVoice ? (
+              <Loader2 className="h-4 w-4 animate-spin text-[#2DD4BF]" />
+            ) : isListening ? (
+              <MicOff className="h-4 w-4" />
+            ) : (
+              <Mic className="h-4 w-4" />
+            )}
           </button>
         )}
 
         <input
           type="text"
           value={input}
+          disabled={isSending || isListening || isProcessingVoice}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask in English, తెలుగు, தமிழ், ಕನ್ನಡ, or हिन्दी (e.g., book cardiology slot, check lab status using my receipt code)..."
-          className="flex-1 rounded-xl border border-[#334155] bg-[#111B2E] px-4 py-2.5 text-sm text-[#E5EDF7] placeholder-[#94A3B8]/60 focus:border-[#2DD4BF] focus:outline-none"
+          placeholder={
+            isListening
+              ? 'Listening... Click the red microphone button to finish speaking'
+              : isProcessingVoice
+              ? 'Processing speech via Gnani AI...'
+              : 'Ask in English, తెలుగు, தமிழ், ಕನ್ನಡ, or हिन्दी (or click the microphone)...'
+          }
+          className="flex-1 rounded-xl border border-[#334155] bg-[#111B2E] px-4 py-2.5 text-sm text-[#E5EDF7] placeholder-[#94A3B8]/60 focus:border-[#2DD4BF] focus:outline-none disabled:opacity-75"
         />
 
         <button
           type="submit"
-          disabled={isSending || !input.trim()}
+          disabled={isSending || isListening || isProcessingVoice || !input.trim()}
           className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-[#2DD4BF] px-4 text-xs font-semibold text-[#0B1020] transition-colors hover:bg-[#2DD4BF]/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#38BDF8] disabled:opacity-50"
         >
           <Send className="h-4 w-4" />

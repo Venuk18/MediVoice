@@ -26,6 +26,7 @@ import {
   StaffProfile,
   SupportedLanguage,
   ToolCallTrace,
+  VoiceTurnResponse,
   WorkflowExceptionRead,
 } from '../types/api';
 
@@ -130,6 +131,77 @@ async function requestJson<T>(
   }
 
   return (await response.json()) as T;
+}
+
+async function requestMultipart<T>(endpoint: string, formData: FormData): Promise<T> {
+  const headers: Record<string, string> = {
+    'X-MediVoice-Client': 'web',
+  };
+  if (activeAuthToken) {
+    headers['Authorization'] = `Bearer ${activeAuthToken}`;
+  }
+
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  });
+
+  if (!response.ok) {
+    let errorBody: Record<string, unknown> = {};
+    try {
+      errorBody = (await response.json()) as Record<string, unknown>;
+    } catch {
+      // Non-JSON error
+    }
+
+    const detail = errorBody.detail;
+    if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+      const detailObj = detail as Record<string, unknown>;
+      const msg =
+        typeof detailObj.message === 'string'
+          ? detailObj.message
+          : `Voice service error (HTTP ${response.status})`;
+      const code =
+        typeof detailObj.code === 'string' ? detailObj.code : `HTTP_${response.status}`;
+      throw new ApiError(response.status, msg, code, detailObj);
+    }
+
+    if (typeof detail === 'string') {
+      throw new ApiError(response.status, detail, `HTTP_${response.status}`);
+    }
+
+    throw new ApiError(
+      response.status,
+      `Voice request failed with HTTP ${response.status}`,
+      `HTTP_${response.status}`
+    );
+  }
+
+  return (await response.json()) as T;
+}
+
+async function requestBlob(endpoint: string, payload: Record<string, unknown>, correlationId?: string): Promise<Blob> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-MediVoice-Client': 'web',
+    ...(correlationId ? { 'X-MediVoice-Correlation-ID': correlationId } : {}),
+  };
+  if (activeAuthToken) {
+    headers['Authorization'] = `Bearer ${activeAuthToken}`;
+  }
+
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new ApiError(response.status, `Audio synthesis failed with HTTP ${response.status}`, `HTTP_${response.status}`);
+  }
+
+  return await response.blob();
 }
 
 export const medivoiceApi = {
@@ -465,5 +537,54 @@ export const medivoiceApi = {
 
   getAgentConfig(): Promise<AgentConfigRead> {
     return requestJson<AgentConfigRead>('/agent/config');
+  },
+
+  synthesizeSpeech(text: string, language?: string, voice?: string, correlationId?: string): Promise<Blob> {
+    return requestBlob('/voice/synthesize', {
+      text,
+      language,
+      voice,
+    }, correlationId);
+  },
+
+  async sendVoiceTurn(
+    audioBlob: Blob,
+    params: {
+      sessionId?: string | null;
+      patientReference?: string | null;
+      language?: string | null;
+      correlationId?: string | null;
+    } = {}
+  ): Promise<VoiceTurnResponse> {
+    const formData = new FormData();
+    const isWebm = audioBlob.type.includes('webm');
+    const isOgg = audioBlob.type.includes('ogg');
+    const filename = isWebm ? 'patient_recording.webm' : isOgg ? 'patient_recording.ogg' : 'patient_recording.wav';
+    formData.append('file', audioBlob, filename);
+    if (params.sessionId) formData.append('session_id', params.sessionId);
+    if (params.patientReference) formData.append('patient_reference', params.patientReference);
+    if (params.language) formData.append('language', params.language);
+    if (params.correlationId) formData.append('correlation_id', params.correlationId);
+
+    const raw = await requestMultipart<VoiceTurnResponse>('/voice/respond', formData);
+    const reply = String(raw.assistant_reply ?? raw.reply).trim();
+    const step = String(raw.conversation_step ?? raw.step);
+    const confStatus = raw.confirmation_status;
+    const reqConf = Boolean(
+      raw.requires_confirmation ?? (confStatus === 'PENDING' || step === 'AWAITING_CONFIRMATION')
+    );
+    const toolCalls = raw.tool_calls ?? raw.tool_trace ?? [];
+
+    return {
+      ...raw,
+      reply,
+      assistant_reply: reply,
+      step,
+      conversation_step: step,
+      confirmation_status: confStatus,
+      requires_confirmation: reqConf,
+      tool_calls: toolCalls,
+      tool_trace: toolCalls,
+    };
   },
 };

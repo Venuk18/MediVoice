@@ -26,6 +26,16 @@ export function shouldResumeVoiceMode(isBookingCompleted: boolean): boolean {
   return !isBookingCompleted;
 }
 
+export function base64ToBlob(base64: string, mimeType = 'audio/wav'): Blob {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: mimeType });
+}
+
 export class TurnAudioCache {
   private readonly audioUrls = new Map<string, string>();
   private readonly requests = new Map<string, Promise<string>>();
