@@ -51,7 +51,11 @@ def test_update_lab_order_status(client, db_session, seeded_hospital_data):
         "workflow_status": "Processing",
         "delay_reason": None,
     }
-    response = client.patch(f"/api/v1/lab-orders/{order_id}/status", json=payload)
+    response = client.patch(
+        f"/api/v1/lab-orders/{order_id}/status",
+        headers=_lab_headers(client),
+        json=payload,
+    )
     assert response.status_code == 200
     data = response.json()
     assert data["workflow_status"] == "Processing"
@@ -75,7 +79,11 @@ def test_reject_invalid_lab_status(client, seeded_hospital_data):
     payload = {
         "workflow_status": "ArbitraryNonExistentStatus",
     }
-    response = client.patch(f"/api/v1/lab-orders/{order_id}/status", json=payload)
+    response = client.patch(
+        f"/api/v1/lab-orders/{order_id}/status",
+        headers=_lab_headers(client),
+        json=payload,
+    )
     assert response.status_code in [400, 422]
 
 
@@ -112,6 +120,7 @@ def test_create_lab_order_and_demo_patient_portal_access(client, seeded_hospital
     dept_id = seeded_hospital_data["dept_cardio"].id
     create_resp = client.post(
         "/api/v1/lab-orders",
+        headers=_lab_headers(client),
         json={
             "patient_reference": "PAT-DEMO-7001",
             "ordering_department_id": dept_id,

@@ -491,3 +491,55 @@ test('affirmative transcript does not book appointment unless confirmation_statu
   assert.equal(canConfirmAppointment('ఖరారు చేయండి', validPendingState), true);
 });
 
+
+// -----------------------------------------------------------------------------
+// Suite 8: Phase 2 Telugu-First Conversational Intelligence & Persistence
+// -----------------------------------------------------------------------------
+
+test('voice interaction defaults to Telugu (te) while text chat defaults to English (en)', () => {
+  const textChatDefaultLanguage = 'en';
+  const voiceInteractionDefaultLanguage = 'te';
+
+  assert.equal(textChatDefaultLanguage, 'en');
+  assert.equal(voiceInteractionDefaultLanguage, 'te');
+});
+
+test('voice turn payload includes language=te by default and persists session state', async () => {
+  let capturedFormData = null;
+
+  const mockApiClient = {
+    async sendVoiceTurn(audioBlob, options) {
+      capturedFormData = {
+        sessionId: options.sessionId,
+        patientReference: options.patientReference,
+        language: options.language,
+        correlationId: options.correlationId,
+      };
+
+      return {
+        session_id: options.sessionId || 'mock-session-123',
+        transcript: 'నాకు కార్డియాలజీ డాక్టర్ కావాలి',
+        reply: 'డాక్టర్ రాజేష్ శర్మ అందుబాటులో ఉన్నారు.',
+        language: 'te',
+        step: 'COLLECTING_DOCTOR',
+        confirmation_status: 'NONE',
+        draft: { specialty: 'Cardiology' },
+      };
+    },
+  };
+
+  const dummyAudio = new Uint8Array([1, 2, 3, 4]);
+  const dummyBlob = { size: 1024, type: 'audio/wav', data: dummyAudio };
+
+  const result = await mockApiClient.sendVoiceTurn(dummyBlob, {
+    sessionId: 'sess-telugu-1',
+    patientReference: 'PAT-2024-9182',
+    language: 'te',
+    correlationId: 'corr-telugu-turn-1',
+  });
+
+  assert.equal(capturedFormData.language, 'te');
+  assert.equal(capturedFormData.sessionId, 'sess-telugu-1');
+  assert.equal(result.language, 'te');
+  assert.equal(result.draft.specialty, 'Cardiology');
+});

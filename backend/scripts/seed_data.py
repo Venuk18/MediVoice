@@ -33,6 +33,7 @@ from app.models.insurance import InsuranceProvider, InsurancePlan
 from app.models.workflow_exception import WorkflowException
 from app.models.audit_event import AuditEvent
 from app.models.maintenance import MaintenanceWorkOrder
+from app.services.doctor_service import generate_upcoming_slots_for_doctors
 
 
 
@@ -143,111 +144,94 @@ def seed_database(db: Session, reset: bool = False):
             print(f"  [+] Added Doctor: {doc_def['name']} ({doc_def['specialty']})")
         doc_map[doc_def["name"]] = existing_doc
 
-    # 4. Future Appointment Slots (Multiple future slots per doctor over next 3 days)
     now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    slot_count = 0
-    slot_map = {}
 
-    for doc_idx, doc_def in enumerate(doctor_defs, start=1):
-        doc_id = doc_def["id"]
-        slot_seq = 0
-        # Generate 6 future slots for each doctor (days 1, 2, 3: morning 10am, afternoon 2pm)
-        for day_offset in [1, 2, 3]:
-            for hour in [10, 14]:
-                slot_seq += 1
-                deterministic_slot_id = f"slot-{doc_idx * 100 + slot_seq}"
-                slot_start = (now_utc + timedelta(days=day_offset)).replace(hour=hour)
-                slot_end = slot_start + timedelta(minutes=30)
-                slot_key = f"{doc_id}_{slot_start.strftime('%Y%m%d%H%M')}"
-                
-                existing_slot = db.scalars(
-                    select(AppointmentSlot).where(
-                        (AppointmentSlot.id == deterministic_slot_id)
-                        | (
-                            (AppointmentSlot.doctor_id == doc_id)
-                            & (AppointmentSlot.start_time == slot_start)
-                        )
-                    )
-                ).first()
-
-                if not existing_slot:
-                    existing_slot = AppointmentSlot(
-                        id=deterministic_slot_id,
-                        doctor_id=doc_id,
-                        start_time=slot_start,
-                        end_time=slot_end,
-                        status="AVAILABLE",
-                    )
-                    db.add(existing_slot)
-                    db.flush()
-                    slot_count += 1
-                slot_map[slot_key] = existing_slot
-
-    print(f"  [+] Configured future appointment slots ({slot_count} new slots generated)")
+    # 4. Future Appointment Slots across the next 20 calendar days for all active doctors
+    slot_count = generate_upcoming_slots_for_doctors(db, days=20)
+    print(f"  [+] Configured 20-day appointment availability ({slot_count} new slots generated)")
 
     # 5. Synthetic Appointments in different statuses
+    # Slot 1: Dr. Rajesh Sharma -> CONFIRMED
     dr_sharma_id = doctor_defs[0]["id"]
-    day2_sharma_10am_key = f"{dr_sharma_id}_{(now_utc + timedelta(days=2)).replace(hour=10).strftime('%Y%m%d%H%M')}"
-    slot1 = slot_map.get(day2_sharma_10am_key)
-    
     appt1_id = "44444444-0001-0000-0000-000000000001"
     existing_appt1 = db.scalars(select(Appointment).where(Appointment.id == appt1_id)).first()
-    if not existing_appt1 and slot1:
-        slot1.status = "BOOKED"
-        existing_appt1 = Appointment(
-            id=appt1_id,
-            patient_reference="PAT-2024-9182",
-            doctor_id=dr_sharma_id,
-            slot_id=slot1.id,
-            appointment_status="CONFIRMED",
-            reason_category="Chest Pain & Palpitations Evaluation",
-            follow_up_recommended=False,
-        )
-        db.add(existing_appt1)
-        print("  [+] Added Synthetic Appointment: CONFIRMED (PAT-2024-9182 with Dr. Rajesh Sharma)")
+    if not existing_appt1:
+        sharma_slots = db.scalars(
+            select(AppointmentSlot).where(
+                AppointmentSlot.doctor_id == dr_sharma_id,
+                AppointmentSlot.status == "AVAILABLE",
+            ).order_by(AppointmentSlot.start_time.asc())
+        ).all()
+        # Reserve the second available slot for Dr. Sharma so earlier slot remains available for next-slot tests
+        slot1 = sharma_slots[1] if len(sharma_slots) > 1 else (sharma_slots[0] if sharma_slots else None)
+        if slot1:
+            slot1.status = "BOOKED"
+            existing_appt1 = Appointment(
+                id=appt1_id,
+                patient_reference="PAT-2024-9182",
+                doctor_id=dr_sharma_id,
+                slot_id=slot1.id,
+                appointment_status="CONFIRMED",
+                reason_category="Chest Pain & Palpitations Evaluation",
+                follow_up_recommended=False,
+            )
+            db.add(existing_appt1)
+            print("  [+] Added Synthetic Appointment: CONFIRMED (PAT-2024-9182 with Dr. Rajesh Sharma)")
 
     # Slot 2: Dr. Priya Nair -> COMPLETED with follow-up recommendation
     dr_nair_id = doctor_defs[1]["id"]
-    day1_14pm_key = f"{dr_nair_id}_{(now_utc + timedelta(days=1)).replace(hour=14).strftime('%Y%m%d%H%M')}"
-    slot2 = slot_map.get(day1_14pm_key)
     appt2_id = "44444444-0002-0000-0000-000000000002"
     existing_appt2 = db.scalars(select(Appointment).where(Appointment.id == appt2_id)).first()
-    if not existing_appt2 and slot2:
-        slot2.status = "BOOKED"
-        existing_appt2 = Appointment(
-            id=appt2_id,
-            patient_reference="PAT-2024-3310",
-            doctor_id=dr_nair_id,
-            slot_id=slot2.id,
-            appointment_status="COMPLETED",
-            reason_category="Chronic Migraine & Aura Review",
-            visit_completed_at=now_utc - timedelta(hours=2),
-            follow_up_recommended=True,
-            follow_up_date=now_utc + timedelta(days=30),
-            follow_up_notes="Review headache frequency diary in 4 weeks. Repeat MRI if visual aura increases.",
-        )
-        db.add(existing_appt2)
-        print("  [+] Added Synthetic Appointment: COMPLETED (PAT-2024-3310 with Dr. Priya Nair)")
+    if not existing_appt2:
+        nair_slots = db.scalars(
+            select(AppointmentSlot).where(
+                AppointmentSlot.doctor_id == dr_nair_id,
+                AppointmentSlot.status == "AVAILABLE",
+            ).order_by(AppointmentSlot.start_time.asc())
+        ).all()
+        slot2 = nair_slots[0] if nair_slots else None
+        if slot2:
+            slot2.status = "BOOKED"
+            existing_appt2 = Appointment(
+                id=appt2_id,
+                patient_reference="PAT-2024-3310",
+                doctor_id=dr_nair_id,
+                slot_id=slot2.id,
+                appointment_status="COMPLETED",
+                reason_category="Chronic Migraine & Aura Review",
+                visit_completed_at=datetime.now(timezone.utc) - timedelta(hours=2),
+                follow_up_recommended=True,
+                follow_up_date=datetime.now(timezone.utc) + timedelta(days=30),
+                follow_up_notes="Review headache frequency diary in 4 weeks. Repeat MRI if visual aura increases.",
+            )
+            db.add(existing_appt2)
+            print("  [+] Added Synthetic Appointment: COMPLETED (PAT-2024-3310 with Dr. Priya Nair)")
 
     # Slot 3: Dr. Arvind Swamy -> CANCELLED (Slot remains AVAILABLE)
     dr_swamy_id = doctor_defs[2]["id"]
-    day2_10am_key = f"{dr_swamy_id}_{(now_utc + timedelta(days=2)).replace(hour=10).strftime('%Y%m%d%H%M')}"
-    slot3 = slot_map.get(day2_10am_key)
     appt3_id = "44444444-0003-0000-0000-000000000003"
     existing_appt3 = db.scalars(select(Appointment).where(Appointment.id == appt3_id)).first()
-    if not existing_appt3 and slot3:
-        slot3.status = "AVAILABLE"
-        existing_appt3 = Appointment(
-            id=appt3_id,
-            patient_reference="PAT-2024-5501",
-            doctor_id=dr_swamy_id,
-            slot_id=slot3.id,
-            appointment_status="CANCELLED",
-            reason_category="Knee Arthroscopy Follow-up",
-            follow_up_recommended=False,
-        )
-        db.add(existing_appt3)
-        print("  [+] Added Synthetic Appointment: CANCELLED (PAT-2024-5501 with Dr. Arvind Swamy)")
+    if not existing_appt3:
+        swamy_slots = db.scalars(
+            select(AppointmentSlot).where(
+                AppointmentSlot.doctor_id == dr_swamy_id,
+                AppointmentSlot.status == "AVAILABLE",
+            ).order_by(AppointmentSlot.start_time.asc())
+        ).all()
+        slot3 = swamy_slots[1] if len(swamy_slots) > 1 else (swamy_slots[0] if swamy_slots else None)
+        if slot3:
+            slot3.status = "AVAILABLE"
+            existing_appt3 = Appointment(
+                id=appt3_id,
+                patient_reference="PAT-2024-5501",
+                doctor_id=dr_swamy_id,
+                slot_id=slot3.id,
+                appointment_status="CANCELLED",
+                reason_category="Knee Arthroscopy Follow-up",
+                follow_up_recommended=False,
+            )
+            db.add(existing_appt3)
+            print("  [+] Added Synthetic Appointment: CANCELLED (PAT-2024-5501 with Dr. Arvind Swamy)")
 
     # 6. Synthetic Lab Orders with 6-digit verification codes (including leading-zero code "048271")
     lab_orders_defs = [

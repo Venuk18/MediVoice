@@ -10,6 +10,7 @@ const VALID_ROUTES: Set<AppRoutePath> = new Set([
   '/support',
   '/medivoice',
   '/staff/login',
+  '/staff/demo',
   '/login',
   '/doctor',
   '/doctor/appointments',
@@ -69,7 +70,9 @@ export function useMediVoiceRoute() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
-  const activeWorkspace: WorkspaceTab = currentRoute.startsWith('/doctor')
+  const activeWorkspace: WorkspaceTab = currentRoute === '/staff/demo'
+    ? 'demo'
+    : currentRoute.startsWith('/doctor') && currentRoute !== '/doctors'
     ? 'doctor'
     : currentRoute.startsWith('/lab') && currentRoute !== '/lab-status'
     ? 'lab'

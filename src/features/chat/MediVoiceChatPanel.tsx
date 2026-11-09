@@ -123,6 +123,7 @@ export const MediVoiceChatPanel: React.FC = () => {
   const [input, setInput] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
   const [activeLanguage, setActiveLanguage] = useState<SupportedLanguage>('en');
+  const [voiceLanguage, setVoiceLanguage] = useState<SupportedLanguage>('te');
   const [conversationStep, setConversationStep] = useState<string>('GREETING');
   const [confirmationStatus, setConfirmationStatus] = useState<string>('NONE');
   const [requiresConfirmation, setRequiresConfirmation] = useState<boolean>(false);
@@ -252,6 +253,8 @@ export const MediVoiceChatPanel: React.FC = () => {
     }
 
     setVoiceError(null);
+    setVoiceLanguage('te');
+    setActiveLanguage('en');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -310,7 +313,7 @@ export const MediVoiceChatPanel: React.FC = () => {
           const response = await medivoiceApi.sendVoiceTurn(audioBlob, {
             sessionId,
             patientReference: activePatientRef,
-            language: activeLanguage,
+            language: voiceLanguage || 'te',
             correlationId,
           });
 
@@ -330,6 +333,7 @@ export const MediVoiceChatPanel: React.FC = () => {
           setSessionId(response.session_id);
           if (response.language) {
             setActiveLanguage(response.language as SupportedLanguage);
+            setVoiceLanguage(response.language as SupportedLanguage);
           }
           setConversationStep(response.conversation_step || response.step);
           setConfirmationStatus(response.confirmation_status);

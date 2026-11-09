@@ -33,6 +33,7 @@ import { rememberPatientAppointmentReference } from '../../services/patientAppoi
 import {
   BookingDraftState,
   SupportedLanguage,
+  VoiceLanguagePreference,
   ToolCallTrace,
   VoiceToolExecutionResult,
 } from '../../types/api';
@@ -307,6 +308,7 @@ export const MediVoiceChatExperience: React.FC<MediVoiceChatExperienceProps> = (
     () => `sess-${Math.random().toString(36).slice(2, 10)}`
   );
   const [selectedLang, setSelectedLang] = useState<SupportedLanguage>('en');
+  const [voiceLanguage, setVoiceLanguage] = useState<VoiceLanguagePreference>('auto');
   const [inputMessage, setInputMessage] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
   const [chatError, setChatError] = useState<string | null>(null);
@@ -644,6 +646,7 @@ export const MediVoiceChatExperience: React.FC<MediVoiceChatExperienceProps> = (
     setSessionId(freshSession);
     setChatError(null);
     lastUserMessageRef.current = '';
+    setVoiceLanguage('auto');
     setTurns([
       {
         id: `welcome-${Date.now()}`,
@@ -855,19 +858,6 @@ export const MediVoiceChatExperience: React.FC<MediVoiceChatExperienceProps> = (
                           <ShieldCheck className="h-4 w-4 shrink-0 text-amber-600" />
                           <span>Explicit Patient Confirmation Required</span>
                         </div>
-                        {turn.draft?.selected_doctor_name && (
-                          <div className="mt-1.5 text-xs text-slate-700 bg-white/70 rounded-lg p-2 border border-amber-200">
-                            <strong>Doctor:</strong> {turn.draft.selected_doctor_name} ·{' '}
-                            <strong>Slot:</strong>{' '}
-                            {turn.draft.selected_slot_time || turn.draft.selected_slot_id}
-                            {turn.draft.patient_reference && (
-                              <>
-                                {' '}· <strong>Patient ID:</strong>{' '}
-                                <span className="font-mono">{turn.draft.patient_reference}</span>
-                              </>
-                            )}
-                          </div>
-                        )}
                         <p className="mt-1.5 text-[11px] text-amber-800">
                           MediVoice AI strictly requires explicit patient confirmation before booking slots in Aarogya One Hospital records.
                         </p>
@@ -1225,8 +1215,13 @@ export const MediVoiceChatExperience: React.FC<MediVoiceChatExperienceProps> = (
         <MediVoiceVoicePanel
           sessionId={sessionId}
           patientReference={activePatientRef}
-          selectedLanguage={selectedLang}
-          onLanguageChange={(lang) => setSelectedLang(lang)}
+          selectedLanguage={voiceLanguage}
+          onLanguageChange={(lang) => {
+            setVoiceLanguage(lang);
+            if (lang !== 'auto') {
+              setSelectedLang(lang);
+            }
+          }}
           onVoiceTurnSuccess={handleVoiceTurnSuccess}
           onGreetingSpoken={handleGreetingSpoken}
           onClose={() => setShowVoicePanel(false)}

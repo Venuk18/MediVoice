@@ -34,6 +34,7 @@ import {
   LabVerificationResponse,
 } from '../../types/api';
 import { MediVoiceChatExperience } from '../chatbot/MediVoiceChatExperience';
+import { ErrorBoundary } from '../../components/ErrorBoundary';
 import { getPatientAppointmentReferences, rememberPatientAppointmentReference } from '../../services/patientAppointmentAccess';
 import { formatHospitalDateTime, formatHospitalTime } from '../../services/formatting';
 
@@ -358,7 +359,14 @@ export const PatientWebsiteView: React.FC = () => {
   if (currentRoute === '/medivoice') {
     return (
       <div className="mx-auto max-w-[1440px] px-4 py-6 sm:px-6 lg:px-8">
-        <MediVoiceChatExperience mode="fullscreen" />
+        <ErrorBoundary
+          boundaryName="MediVoice Voice Assistant"
+          level="widget"
+          fallbackTitle="Voice Assistant Temporarily Unavailable"
+          fallbackMessage="The MediVoice AI voice interface encountered a temporary rendering issue. You can restart the assistant or return to the patient portal."
+        >
+          <MediVoiceChatExperience mode="fullscreen" />
+        </ErrorBoundary>
       </div>
     );
   }
@@ -413,7 +421,8 @@ export const PatientWebsiteView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    if (staffProfile.role === 'DOCTOR') navigate('/doctor');
+                    if (staffProfile.role === 'DEMO_VIEWER') navigate('/staff/demo');
+                    else if (staffProfile.role === 'DOCTOR') navigate('/doctor');
                     else if (staffProfile.role === 'LAB_OPERATOR') navigate('/lab');
                     else navigate('/maintenance');
                   }}
@@ -445,7 +454,8 @@ export const PatientWebsiteView: React.FC = () => {
               if (!loginPassword) return;
               const res = await loginAsStaff(loginUsername.trim(), loginPassword);
               if (res) {
-                if (res.role === 'DOCTOR') navigate('/doctor');
+                if (res.role === 'DEMO_VIEWER') navigate('/staff/demo');
+                else if (res.role === 'DOCTOR') navigate('/doctor');
                 else if (res.role === 'LAB_OPERATOR') navigate('/lab');
                 else navigate('/maintenance');
               }
@@ -611,7 +621,14 @@ export const PatientWebsiteView: React.FC = () => {
 
           {/* Section 2: Full-Width MediVoice AI Chat */}
           <section id="medivoice-ai-chat" className="w-full scroll-mt-6">
-            <MediVoiceChatExperience mode="fullwidth" />
+            <ErrorBoundary
+              boundaryName="MediVoice Conversational Assistant"
+              level="widget"
+              fallbackTitle="Conversational Assistant Temporarily Unavailable"
+              fallbackMessage="The interactive hospital assistant encountered an issue. Tap below to restart your conversation or use direct booking below."
+            >
+              <MediVoiceChatExperience mode="fullwidth" />
+            </ErrorBoundary>
           </section>
 
           {/* 4-Service Entry Points Strip */}

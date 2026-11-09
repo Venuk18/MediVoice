@@ -166,6 +166,15 @@ def test_rejection_of_inactive_doctor(client, seeded_hospital_data):
     assert "inactive" in response.json()["detail"].lower()
 
 
+def _doc_headers(client):
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"username": "dr.sharma", "password": "demo-doctor-password"},
+    )
+    assert login.status_code == 200
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
 def test_appointment_cancellation_and_slot_release(client, db_session, seeded_hospital_data):
     appt_id = seeded_hospital_data["existing_appt"].id
     slot_id = seeded_hospital_data["slot_booked"].id
@@ -174,9 +183,10 @@ def test_appointment_cancellation_and_slot_release(client, db_session, seeded_ho
     slot = db_session.scalars(select(AppointmentSlot).where(AppointmentSlot.id == slot_id)).first()
     assert slot.status == "BOOKED"
 
-    # Cancel appointment
+    # Cancel appointment with doctor authorization
     response = client.post(
         f"/api/v1/appointments/{appt_id}/cancel",
+        headers=_doc_headers(client),
         json={"cancellation_reason": "Patient requested reschedule"},
     )
     assert response.status_code == 200
@@ -204,6 +214,7 @@ def test_appointment_completion(client, db_session, seeded_hospital_data):
 
     response = client.post(
         f"/api/v1/appointments/{appt_id}/complete",
+        headers=_doc_headers(client),
         json={"notes": "Patient attended consultation smoothly"},
     )
     assert response.status_code == 200
@@ -231,7 +242,11 @@ def test_follow_up_recommendation_recording(client, db_session, seeded_hospital_
         "follow_up_notes": "Repeat lipid profile in 14 days and review fasting glucose.",
     }
 
-    response = client.post(f"/api/v1/appointments/{appt_id}/follow-up", json=payload)
+    response = client.post(
+        f"/api/v1/appointments/{appt_id}/follow-up",
+        headers=_doc_headers(client),
+        json=payload,
+    )
     assert response.status_code == 200
     data = response.json()
 

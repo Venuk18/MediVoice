@@ -84,12 +84,15 @@ def normalize_stt_language(lang: Optional[str]) -> str:
     return GNANI_STT_LANGUAGE_MAP.get(normalized, settings.GNANI_DEFAULT_LANGUAGE)
 
 
-def map_to_internal_language(gnani_lang: Optional[str]) -> str:
-    """Maps a Gnani language code back to our internal language identifier ('en', 'te', etc.)."""
+def map_to_internal_language(gnani_lang: Optional[str]) -> Optional[str]:
+    """
+    Maps a Gnani language code back to our internal language identifier ('en', 'te', etc.).
+    Returns None if unmapped or unsupported Indic language (e.g., Gujarati, Malayalam, Bengali).
+    """
     if not gnani_lang:
-        return "en"
+        return None
     clean = gnani_lang.strip().lower()
-    return INTERNAL_LANG_MAP.get(clean, "en")
+    return INTERNAL_LANG_MAP.get(clean, None)
 
 
 def convert_audio_to_wav(audio_bytes: bytes, content_type: Optional[str] = None) -> Tuple[bytes, str, str]:
@@ -239,7 +242,7 @@ class GnaniPrismaSTT:
 
     def _mock_transcribe(self, audio_bytes: bytes, language_code: str) -> Dict[str, Any]:
         """Provides simulated transcription for testing and offline local development."""
-        lang_internal = map_to_internal_language(language_code)
+        lang_internal = map_to_internal_language(language_code) or "en"
         
         # Check if the audio contains an ASCII marker from tests
         raw_text = ""
@@ -260,11 +263,16 @@ class GnaniPrismaSTT:
             }
             raw_text = default_phrases.get(lang_internal, "I need to book an appointment with a doctor")
 
+        detected_internal = lang_internal
+        if raw_text:
+            from app.agent.language_resolver import resolve_adaptive_language
+            detected_internal, _ = resolve_adaptive_language(raw_text, current_session_language=lang_internal)
+
         return {
             "transcript": raw_text,
             "full_transcript": raw_text,
-            "language_code": language_code,
-            "detected_language": lang_internal,
+            "language_code": GNANI_STT_LANGUAGE_MAP.get(detected_internal, language_code),
+            "detected_language": detected_internal,
             "confidence": 0.96,
             "model": "mock-prisma",
             "transcode_ms": 0.0,
@@ -440,7 +448,7 @@ class GnaniPrismaSTT:
             "transcript": transcript,
             "full_transcript": transcript,
             "language_code": resolved_lang_code,
-            "detected_language": detected_internal,
+            "detected_language": detected_internal or "uncertain",
             "confidence": data.get("confidence", 0.95),
             "model": self.model,
             "segments": data.get("segments", []),

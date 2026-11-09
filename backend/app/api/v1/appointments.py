@@ -3,7 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.security import StaffRole, require_staff_roles
+from app.core.security import StaffRole, require_staff_roles, get_current_authenticated_identity
 from app.db.session import get_db
 from app.schemas.appointment import (
     AppointmentCreate,
@@ -18,10 +18,11 @@ router = APIRouter(prefix="/appointments", tags=["Appointments"])
 
 _require_doctor_role = require_staff_roles(
     [StaffRole.DOCTOR],
-    strict_unauthenticated=False,
+    strict_unauthenticated=True,
 )
 _require_staff_role = require_staff_roles(
     [StaffRole.DOCTOR, StaffRole.LAB_OPERATOR, StaffRole.MAINTENANCE_STAFF],
+    strict_unauthenticated=True,
 )
 
 
@@ -112,21 +113,58 @@ def cancel_appointment_endpoint(
     appointment_id: str,
     payload: Optional[AppointmentCancelRequest] = None,
     db: Session = Depends(get_db),
+    claims: dict = Depends(get_current_authenticated_identity),
 ):
     """
     Controlled cancellation:
-    - Updates appointment status to CANCELLED
-    - Releases the slot back to AVAILABLE
-    - Logs audit trail
+    - Requires authenticated DOCTOR/ADMIN staff identity or verified owning PATIENT identity.
+    - Validates appointment existence and ownership prior to cancellation.
+    - Updates appointment status to CANCELLED and atomically releases the slot back to AVAILABLE.
+    - Logs audit trail with verified caller identity.
     """
+    role = claims.get("role", "")
+
+    appt = appointment_service.get_appointment_by_id(db, appointment_id)
+    if not appt:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Appointment with ID '{appointment_id}' not found.",
+        )
+
+    if role in (StaffRole.DOCTOR.value, StaffRole.ADMIN.value):
+        actor = claims.get("display_name") or claims.get("username") or f"STAFF:{role}"
+    elif role == "PATIENT":
+        token_patient_ref = (claims.get("patient_reference") or "").strip()
+        if not token_patient_ref or token_patient_ref.upper() != appt.patient_reference.strip().upper():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "INSUFFICIENT_PERMISSIONS",
+                    "message": "Access denied: You are not authorized to cancel an appointment belonging to another patient.",
+                },
+            )
+        actor = f"PATIENT:{token_patient_ref}"
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "INSUFFICIENT_ROLE_PERMISSIONS",
+                "message": (
+                    f"Access denied: Role '{role}' is not authorized to cancel appointments. "
+                    "Permitted roles: DOCTOR, ADMIN, or the owning PATIENT."
+                ),
+                "current_role": role,
+            },
+        )
+
     reason = payload.cancellation_reason if payload else "Patient requested"
-    appt = appointment_service.cancel_appointment(
+    cancelled_appt = appointment_service.cancel_appointment(
         db=db,
         appointment_id=appointment_id,
         cancellation_reason=reason,
-        actor_reference="API_CLIENT",
+        actor_reference=actor,
     )
-    return _to_appointment_read(appt)
+    return _to_appointment_read(cancelled_appt)
 
 
 @router.post("/{appointment_id}/complete", response_model=AppointmentRead, summary="Complete appointment visit")
@@ -142,7 +180,7 @@ def complete_appointment_endpoint(
     Clinical notes are excluded; only operational completion status is recorded.
     """
     notes = payload.notes if payload else "Visit concluded"
-    actor = (claims.get("display_name") if claims else None) or "DOCTOR_DASHBOARD"
+    actor = claims.get("display_name") or claims.get("username") or "DOCTOR_DASHBOARD"
     appt = appointment_service.complete_appointment(
         db=db,
         appointment_id=appointment_id,
@@ -164,7 +202,7 @@ def record_follow_up_endpoint(
     Protected by DOCTOR role authorization.
     Does NOT automatically create or book a subsequent appointment.
     """
-    actor = (claims.get("display_name") if claims else None) or "DOCTOR_DASHBOARD"
+    actor = claims.get("display_name") or claims.get("username") or "DOCTOR_DASHBOARD"
     appt = appointment_service.record_follow_up(
         db=db,
         appointment_id=appointment_id,

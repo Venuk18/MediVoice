@@ -21,6 +21,13 @@ import httpx
 
 logger = logging.getLogger("medivoice.gemini")
 
+from app.agent.language_resolver import (
+    resolve_adaptive_language,
+    detect_explicit_language_command,
+    is_entity_only_or_patient_info,
+    detect_script_language,
+)
+
 
 
 from app.core.config import settings
@@ -98,6 +105,8 @@ EXPLICIT_LANGUAGE_SWITCH_PATTERNS: List[tuple[str, str]] = [
     ("te", r"(?:దయచేసి\s+)?తెలుగులో\s*(?:మాట్లాడండి|చెప్పండి|కొనసాగించండి|మాట్లాడుదాం)?[\s:,\-]*"),
 
     ("te", r"^\s*తెలుగు[\s:,\-]*$"),
+    ("te", r"(?:in\s+)?telugu\s+lo\s+(?:cheppandi|matladandi)\b[\s:,\-]*"),
+    ("te", r"\b(?:telugu\s+lo|telugulo)\b[\s:,\-]*"),
 
     ("ta", r"(?:please\s+)?(?:can\s+we\s+|let'?s\s+)?(?:switch|change|talk|speak|chat|continue|reply|respond)\s+(?:language\s+)?(?:to|in)\s+tamil\b[\s:,\-]*"),
 
@@ -129,7 +138,9 @@ EXPLICIT_LANGUAGE_SWITCH_PATTERNS: List[tuple[str, str]] = [
 
     ("en", r"(?:ఇంగ్లీష్‌లో|ఇంగ్లీషులో|ஆங்கிலத்தில்|ಇಂಗ್ಲಿಷ್‌ನಲ್ಲಿ|अंग्रेजी\s*में|इंग्लिश\s*में)\s*(?:మాట్లాడండి|చెప్పండి|பேசவும்|ಮಾತನಾಡಿ|बात\s*करें|बोलें)?[\s:,\-]*"),
 
-    ("en", r"^\s*(?:ఇంగ్లీష్|ஆங்கிலம்|ಇಂಗ್ಲಿಷ್|अंग्रेजी)[\s:,\-]*$"),
+    ("en", r"^\s*(?:ఇంగ్లీష్|ஆங்கிலம்|ಇంగ్ಲಿಷ್|अंग्रेजी)[\s:,\-]*$"),
+    ("en", r"(?:in\s+)?english\s+lo\s+(?:cheppandi|matladandi)\b[\s:,\-]*"),
+    ("en", r"\b(?:english\s+lo|englishlo)\b[\s:,\-]*"),
 
 ]
 
@@ -138,67 +149,12 @@ EXPLICIT_LANGUAGE_SWITCH_PATTERNS: List[tuple[str, str]] = [
 
 
 def detect_explicit_language_switch(text: str) -> tuple[Optional[str], str]:
-
     """
-
-    Detects if the patient is explicitly requesting a language switch (e.g., 'Switch to Telugu',
-
-    'తెలుగులో మాట్లాడండి', 'తెలుగు', 'Speak in Tamil').
-
+    Detects if the patient is explicitly requesting a language switch.
     Returns (target_language_code, remaining_message_text).
-
     """
-
-    if not text or not text.strip():
-
-        return None, ""
-
-
-
-    stripped = text.strip()
-
-    for lang_code, pattern in EXPLICIT_LANGUAGE_SWITCH_PATTERNS:
-
-        m = re.search(pattern, stripped, flags=re.IGNORECASE)
-
-        if m:
-
-            remaining = (stripped[: m.start()] + " " + stripped[m.end() :]).strip(" ,.:;-!?")
-
-            return lang_code, remaining
-
-
-
-    # Also handle "Telugu: <text>" or "తెలుగు: <text>" prefix format
-
-    prefix_map = [
-
-        ("te", r"^\s*(?:telugu|తెలుగు)\s*[:\-]\s*(.+)$"),
-
-        ("ta", r"^\s*(?:tamil|தமிழ்)\s*[:\-]\s*(.+)$"),
-
-        ("kn", r"^\s*(?:kannada|ಕನ್ನಡ)\s*[:\-]\s*(.+)$"),
-
-        ("hi", r"^\s*(?:hindi|हिन्दी|हिंदी)\s*[:\-]\s*(.+)$"),
-
-        ("en", r"^\s*(?:english|ఇంగ్లీష్|ஆங்கிலம்|ಇಂಗ್ಲಿಷ್|अंग्रेजी)\s*[:\-]\s*(.+)$"),
-
-    ]
-
-    for lang_code, pattern in prefix_map:
-
-        m = re.match(pattern, stripped, flags=re.IGNORECASE)
-
-        if m:
-
-            return lang_code, m.group(1).strip()
-
-
-
-    return None, stripped
-
-
-
+    target_lang, _, remaining = detect_explicit_language_command(text)
+    return target_lang, remaining
 
 
 def has_expected_language_script(text: str, lang: str) -> bool:
@@ -238,137 +194,12 @@ def has_expected_language_script(text: str, lang: str) -> bool:
 
 
 def detect_language(text: str, current_language: str = "en") -> str:
-
     """
-
     Detects patient language across Telugu (te), Tamil (ta), Kannada (kn),
-
-    Hindi (hi), and English (en), including native scripts, Romanized/transliterated
-
-    phrases (Tenglish, Tanglish, Kanglish, Hinglish), and mixed-language messages.
-
-    Preserves an active non-English session language (e.g. Telugu) across turns
-
-    unless the user explicitly switches languages or writes in another Indic language.
-
+    Hindi (hi), and English (en) using the centralized adaptive language resolver.
     """
-
-    if not text or not text.strip():
-
-        return current_language if current_language in SUPPORTED_LANGUAGES else "en"
-
-
-
-    explicit_lang, _ = detect_explicit_language_switch(text)
-
-    if explicit_lang in SUPPORTED_LANGUAGES:
-
-        return explicit_lang
-
-
-
-    counts = {"te": 0, "ta": 0, "kn": 0, "hi": 0, "en": 0}
-
-    for ch in text:
-
-        cp = ord(ch)
-
-        if 0x0C00 <= cp <= 0x0C7F:
-
-            counts["te"] += 1
-
-        elif 0x0B80 <= cp <= 0x0BFF:
-
-            counts["ta"] += 1
-
-        elif 0x0C80 <= cp <= 0x0CFF:
-
-            counts["kn"] += 1
-
-        elif 0x0900 <= cp <= 0x097F:
-
-            counts["hi"] += 1
-
-        elif ("a" <= ch <= "z") or ("A" <= ch <= "Z"):
-
-            counts["en"] += 1
-
-
-
-    # If any Indic script characters are present, choose the dominant Indic script
-
-    indic_max_lang = max(("te", "ta", "kn", "hi"), key=lambda k: counts[k])
-
-    if counts[indic_max_lang] > 0:
-
-        return indic_max_lang
-
-
-
-    low = text.strip().lower()
-
-    # Transliterated / Romanized language cues in Latin script
-
-    if re.search(
-
-        r"\b(telugu|naaku|naku|aku|edo|mana|teesukovali|kavali|kaavali|avunu|sare|alage|chupinchandi|vaddu|chey|cheyyi|cheyyandi|namaskaram|dhanyavadalu|gunde|noppi|chati|chaati|talanoppi|jwaram|daggu|jalubu|emo|teliyadu|teleedu|telidu|evaru|evvaru|evarni|kalavali|cheppandi|garitho|raddu|marpu|modati|rendava|sahayam|ibbandi|oopiri|upiri|chematalu|teevramaina|bheema|bhima|parikshana|rakta\s+pariksha)\b",
-
-        low,
-
-    ):
-
-        return "te"
-
-    if re.search(
-
-        r"\b(tamil|enakku|vendum|venum|vendaam|vendam|vanakkam|nanri|nenju|vali|idhayam|idhaya|thalaivali|kaichal|irumal|theriyavillai|theriyala|theriyadhu|theriyathu|yaarai|endha|sollunga|maruthuvar|mudhal|irandavadhu|kadumaiyana|moochu|kaattungal|kaapeedu|kappidu|parichothanai|parisotanai|iratha)\b",
-
-        low,
-
-    ):
-
-        return "ta"
-
-    if re.search(
-
-        r"\b(kannada|nanage|beku|bekagide|haudu|beda|namaskara|dhanyavada|ede|novu|hrudaya|talenovu|jwara|kemmu|gottilla|gothilla|tilidilla|thilidilla|yaava|yaaru|vaidyaru|dayavittu|modala|eradane|teevra|usiratada|torisi|thorisi|agali|vime|parikshe|varadi)\b",
-
-        low,
-
-    ):
-
-        return "kn"
-
-    if re.search(
-
-        r"\b(hindi|mujhe|mera|meri|chahiye|haan|nahi|namaste|shukriya|dhanyawad|seene|dard|dil|bukhar|khansi|sirdard|ghutne|kripaya|bataiye|pahla|pehla|doosra|kab|kahan|kaise|pata|shayad|samajh|dikhaun|kaun|kis|tez|gambhir|saans|theek|dikhaiye|dikhao|bima|beema|jaanch|janch)\b",
-
-        low,
-
-    ):
-
-        return "hi"
-
-    if re.search(r"\b(english)\b", low):
-
-        return "en"
-
-
-
-    # Preserve an established Indic conversation language (such as Telugu) unless the user
-
-    # explicitly switches languages (handled above via detect_explicit_language_switch).
-
-    if current_language in ("te", "ta", "kn", "hi"):
-
-        return current_language
-
-
-
-    return "en"
-
-
-
+    lang, _ = resolve_adaptive_language(text, current_session_language=current_language)
+    return lang
 
 
 URGENT_SYMPTOM_PATTERNS: List[str] = [
@@ -1116,6 +947,169 @@ def sanitize_patient_facing_text(text: str, lang: str = "en") -> str:
     return re.sub(r"\bslot[-_][A-Za-z0-9_-]+\b", replacement, text or "", flags=re.IGNORECASE)
 
 
+def format_conversational_slots(
+    doctor_name: str,
+    slots: List[Dict[str, Any]],
+    lang: str = "en",
+) -> str:
+    """
+    Formats available doctor slots into natural, conversational phrasing.
+    If all slots are on a single day (e.g. tomorrow), produces:
+    'Dr. Rajesh Sharma is available tomorrow at 10:00 AM, 11:30 AM and 4:00 PM. Which time works for you?'
+    Otherwise, lists the available options cleanly.
+    """
+    if not slots:
+        return ""
+    clean_lang = lang.split("-")[0].lower() if lang else "en"
+    from datetime import datetime, timezone, timedelta
+    india_tz = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(india_tz)
+    tomorrow_date = now_ist.date() + timedelta(days=1)
+
+    parsed_slots = []
+    for s in slots[:6]:
+        st = s.get("start_time")
+        if not st:
+            continue
+        try:
+            dt = datetime.fromisoformat(st.replace("Z", "+00:00").replace(" ", "T"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=india_tz)
+            else:
+                dt = dt.astimezone(india_tz)
+            parsed_slots.append((dt, s))
+        except Exception:
+            continue
+
+    if not parsed_slots:
+        slot_lines = "\n".join([f"• {format_human_slot_time(s['start_time'], lang=lang)}" for s in slots[:5]])
+        return format_localized_message(lang, "available_slots", doctor_name=doctor_name, slot_lines=slot_lines)
+
+    first_date = parsed_slots[0][0].date()
+    all_same_date = all(dt.date() == first_date for dt, _ in parsed_slots)
+
+    if all_same_date:
+        times_formatted = []
+        for dt, _ in parsed_slots:
+            hour = dt.hour
+            minute = dt.minute
+            h12 = 12 if hour in (0, 12) else hour % 12
+            min_str = f"{minute:02d}"
+            period = "AM" if hour < 12 else "PM"
+            times_formatted.append(f"{h12}:{min_str} {period}")
+
+        if len(times_formatted) > 1:
+            time_str = ", ".join(times_formatted[:-1]) + f" and {times_formatted[-1]}"
+        else:
+            time_str = times_formatted[0]
+
+        is_tomorrow = (first_date == tomorrow_date)
+        if clean_lang == "en":
+            day_label = "tomorrow" if is_tomorrow else f"on {first_date.strftime('%A, %B %d')}"
+            return f"{doctor_name} is available {day_label} at {time_str}. Which time works for you?"
+        elif clean_lang == "te":
+            day_lbl_te = "రేపు" if is_tomorrow else f"{first_date.day}వ తేదీన"
+            return f"{doctor_name} గారు {day_lbl_te} {time_str} అందుబాటులో ఉన్నారు. మీకు ఏ సమయం అనుకూలంగా ఉంటుంది?"
+        elif clean_lang == "hi":
+            day_lbl_hi = "कल" if is_tomorrow else f"{first_date.day} तारीख को"
+            return f"{doctor_name} {day_lbl_hi} {time_str} उपलब्ध हैं। आपके लिए कौन सा समय सही रहेगा?"
+        elif clean_lang == "ta":
+            day_lbl_ta = "நாளை" if is_tomorrow else f"{first_date.day} ஆம் தேதி"
+            return f"{doctor_name} {day_lbl_ta} {time_str} கிடைக்கிறார். உங்களுக்கு எந்த நேரம் வசதியாக இருக்கும்?"
+        elif clean_lang == "kn":
+            day_lbl_kn = "ನಾಳೆ" if is_tomorrow else f"{first_date.day} ರಂದು"
+            return f"{doctor_name} {day_lbl_kn} {time_str} ಲಭ್ಯವಿದ್ದಾರೆ. ನಿಮಗೆ ಯಾವ ಸಮಯ ಅನುಕೂಲಕರವಾಗಿದೆ?"
+
+    slot_lines = "\n".join([f"• {format_human_slot_time(s['start_time'], lang=lang)}" for s in slots[:5]])
+    return format_localized_message(lang, "available_slots", doctor_name=doctor_name, slot_lines=slot_lines)
+
+
+def format_alternative_doctor_offer(
+    doctor_name: str,
+    alt_doctor_name: str,
+    alt_slot_time: str,
+    lang: str = "en",
+) -> str:
+    """
+    Formats recommendation when the requested doctor has no openings in the next 20 days
+    but an active colleague in the same department has available slots.
+    """
+    clean_lang = lang.split("-")[0].lower() if lang else "en"
+    if clean_lang == "te":
+        return (
+            f"{doctor_name} గారికి వచ్చే 20 రోజుల్లో అపాయింట్‌మెంట్‌లు అందుబాటులో లేవు. "
+            f"అయితే, {alt_doctor_name} గారు {alt_slot_time} సమయానికి అందుబాటులో ఉన్నారు. "
+            f"వారితో బుక్ చేయమంటారా?"
+        )
+    elif clean_lang == "hi":
+        return (
+            f"{doctor_name} के लिए अगले 20 दिनों में कोई अपॉइंटमेंट उपलब्ध नहीं है। "
+            f"हालांकि, {alt_doctor_name} {alt_slot_time} उपलब्ध हैं। "
+            f"क्या आप उनके साथ अपॉइंटमेंट बुक करना चाहेंगे?"
+        )
+    elif clean_lang == "ta":
+        return (
+            f"{doctor_name} அவர்களுக்கு அடுத்த 20 நாட்களில் நேரங்கள் எதுவும் கிடைக்கவில்லை. "
+            f"ஆனால் {alt_doctor_name} அவர்கள் {alt_slot_time} கிடைக்கிறார். "
+            f"அவரிடம் பதிவு செய்ய விரும்புகிறீர்களா?"
+        )
+    elif clean_lang == "kn":
+        return (
+            f"{doctor_name} ಅವರಿಗೆ ಮುಂದಿನ 20 ದಿನಗಳಲ್ಲಿ ಯಾವುದೇ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಲಭ್ಯವಿಲ್ಲ. "
+            f"ಆದರೆ {alt_doctor_name} ಅವರು {alt_slot_time} ಲಭ್ಯವಿದ್ದಾರೆ. "
+            f"ಅವರೊಂದಿಗೆ ಬುಕ್ ಮಾಡಲು ಬಯಸುತ್ತೀರಾ?"
+        )
+    else:
+        pronoun = "her" if any(w in alt_doctor_name for w in ("Sunita", "Priya", "Ananya")) else "him"
+        return (
+            f"{doctor_name} doesn't have any available appointments over the next 20 days. "
+            f"However, {alt_doctor_name} is available {alt_slot_time}. "
+            f"Would you like to book with {pronoun}?"
+        )
+
+
+def format_no_department_slots_message(
+    department_name: str,
+    doctor_name: str,
+    lang: str = "en",
+) -> str:
+    """
+    Formats patient-facing response when neither the requested physician nor any
+    department colleague has available appointments over the next 20 days.
+    """
+    clean_lang = lang.split("-")[0].lower() if lang else "en"
+    if clean_lang == "te":
+        return (
+            f"క్షమించండి, {doctor_name} గారితో అపాయింట్‌మెంట్ లభించలేదు, "
+            f"మరియు {department_name} విభాగంలో వచ్చే 20 రోజుల్లో ఇతర స్లాట్‌లు కూడా ఖాళీగా లేవు. "
+            f"మీరు వేరే విభాగం పరిశీలించాలనుకుంటున్నారా లేదా మా హెల్ప్ డెస్క్‌ను సంప్రదించాలనుకుంటున్నారా?"
+        )
+    elif clean_lang == "hi":
+        return (
+            f"मुझे {doctor_name} के साथ कोई उपलब्ध अपॉइंटमेंट नहीं मिला, "
+            f"और अगले 20 दिनों में {department_name} विभाग में कोई अन्य स्लॉट भी उपलब्ध नहीं है। "
+            f"क्या आप किसी अन्य विभाग को देखना चाहेंगे?"
+        )
+    elif clean_lang == "ta":
+        return (
+            f"{doctor_name} அவர்களிடம் நேரம் கிடைக்கவில்லை, "
+            f"மேலும் அடுத்த 20 நாட்களில் {department_name} பிரிவிலும் வேறு நேரங்கள் இல்லை. "
+            f"வேறு துறையைப் பார்க்க விரும்புகிறீர்களா?"
+        )
+    elif clean_lang == "kn":
+        return (
+            f"{doctor_name} ಅವರೊಂದಿಗೆ ಯಾವುದೇ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಕಂಡುಬಂದಿಲ್ಲ, "
+            f"ಮತ್ತು ಮುಂದಿನ 20 ದಿನಗಳಲ್ಲಿ {department_name} ವಿಭಾಗದಲ್ಲಿ ಬೇರೆ ಯಾವುದೇ ಸ್ಲಾಟ್‌ಗಳು ಲಭ್ಯವಿಲ್ಲ. "
+            f"ನೀವು ಬೇರೆ ವಿಭಾಗವನ್ನು ಪರಿಶೀಲಿಸಲು ಬಯಸುತ್ತೀರಾ?"
+        )
+    else:
+        return (
+            f"I couldn't find an available appointment with {doctor_name}, "
+            f"and no other specialists in {department_name} have openings over the next 20 days. "
+            f"Would you like to check another department or speak with our hospital help desk?"
+        )
+
+
 
 
 
@@ -1173,6 +1167,7 @@ def is_explicit_cancellation(text: str) -> bool:
         r"\b(?:cancel(?:\s+the|\s+this)?\s+(?:booking|appointment|request))\b",
         r"\bdon'?t\s+book\b",
         r"\bdo\s+not\s+book\b",
+        r"\b(?:don'?t\s+book|book\s+cheyoddu|vaddu\s+book)\b",
         r"\b(?:raddu|mat\s+karo|book\s+mat\s+karo|booking\s+raddu)\b",
     ]
     for pattern in hard_cancel_patterns:
@@ -1180,7 +1175,7 @@ def is_explicit_cancellation(text: str) -> bool:
             return True
 
     hard_indic_cancel_terms = [
-        "రద్దు", "ఆపు", "బుక్ చేయవద్దు",
+        "రద్దు", "ఆపు", "బుక్ చేయవద్దు", "బుక్ చేయకండి", "చేయకండి", "చేయవద్దు", "వద్దు బుక్", "బుక్ చేయొద్దు",
         "ரத்து", "நிறுத்து",
         "ರದ್ದು", "ನಿಲ್ಲಿಸಿ",
         "रद्द", "मत करो", "रोकें", "कैंसिल", "बुक मत",
@@ -1312,9 +1307,15 @@ def is_affirmative(text: str) -> bool:
     """
     if not text or not text.strip():
         return False
+    from app.agent.language_resolver import detect_unsupported_foreign_script
+    if detect_unsupported_foreign_script(text) is not None:
+        return False
     if is_cancellation(text) or is_ambiguous_reply(text):
         return False
     low = text.strip().lower()
+    # Booking inquiry questions (e.g. 'Can you book an appointment?', 'How do I book?') are inquiries, not confirmations
+    if re.search(r"^(?:can\s+(?:you|i)|could\s+(?:you|i)|how\s+(?:to|do\s+i|can\s+i)|help\s+me|want\s+to\s+know\s+how\s+to)", low):
+        return False
     affirmative_patterns = [
         r"\b(yes|confirm|book|proceed|confirm\s+appointment|book\s+appointment|yes\s+confirm|please\s+confirm|please\s+book|yes\s+please|yes\s+book)\b",
         r"\b(avunu|dhrudheekarinchi|dhruveekarinchi|kharaaru|aam|urudhi|urudhipaduthu|haudu|dhrudhapadisu|khachita|haan|pukhta|kardo|kar\s+do|pakka|book\s+chey|book\s+cheyyi|book\s+cheyyandi)\b",
@@ -1342,6 +1343,11 @@ def is_contextual_affirmative(text: str) -> bool:
     showing a doctor's available slots or checking a suggested department) across
     English, Telugu, Tamil, Kannada, and Hindi.
     """
+    if not text or not text.strip():
+        return False
+    from app.agent.language_resolver import detect_unsupported_foreign_script
+    if detect_unsupported_foreign_script(text) is not None:
+        return False
     if is_cancellation(text) or is_ambiguous_reply(text):
         return False
     if is_affirmative(text):
@@ -1404,28 +1410,43 @@ def is_contextual_affirmative(text: str) -> bool:
 
 def is_flexible_slot_request(text: str) -> bool:
     """
-    Detects when a patient indicates flexibility with appointment time/slot
-    (e.g., 'anything is fine', 'any slot', 'any time', 'earliest', 'whatever works', 'whichever', 'you choose').
+    Detects when a patient indicates flexibility with appointment time/slot or requests
+    the earliest available slot (e.g., 'any time is fine', 'any time is fine. book it',
+    'earliest available appointment', 'next available slot', 'show me the next available slot',
+    'book the first available appointment', 'another doctor is fine', etc.).
     """
     if not text or not text.strip():
         return False
     low = text.strip().lower()
     indic_terms = [
-        "ఏదైనా పర్వాలేదు", "ఏదైనా ఫర్వాలేదు", "ఎప్పుడైనా సరే", "ఎప్పుడైనా పర్వాలేదు", "ఏదైనా సరే", "ఏ సమయమైనా పర్వాలేదు", "ఏ సమయమైనా సరే",
-        "எதுவும் பரவாயில்லை", "எந்த நேரமும் சரி", "எதுவும் சரி",
-        "ಯಾವುದಾದರೂ ಸರಿ", "ಯಾವ ಸಮಯವಾದರೂ ಸರಿ", "ಯಾವುದಾದರೂ ಪರವಾಗಿಲ್ಲ",
-        "कुछ भी चलेगा", "कोई भी चलेगा", "कोई भी समय चलेगा", "कोई भी समय", "कोई भी स्लॉट", "जल्दी वाला", "जो भी हो", "कोई भी",
+        "ఏదైనా పర్వాలేదు", "ఏదైనా ఫర్వాలేదు", "ఎప్పుడైనా సరే", "ఎప్పుడైనా పర్వాలేదు",
+        "ఏదైనా సరే", "ఏ సమయమైనా పర్వాలేదు", "ఏ సమయమైనా సరే", "ఏదైనా సమయం పర్వాలేదు",
+        "ఏదైనా సమయం", "ఏ సమయం అయినా", "మొదటి అందుబాటులో ఉన్న స్లాట్",
+        "తొలి స్లాట్", "తొందరగా ఉన్న సమయం", "వేరే డాక్టర్ అయినా పర్వాలేదు",
+        "எதுவும் பரவாயில்லை", "எந்த நேரமும் சரி", "எதுவும் சரி", "முதல் நேரம்", "வேறு மருத்துவர் சரி",
+        "ಯಾವುದಾದರೂ ಸರಿ", "ಯಾವ ಸಮಯವಾದರೂ ಸರಿ", "ಯಾವುದಾದರೂ ಪರವಾಗಿಲ್ಲ", "ಮೊದಲ ಲಭ್ಯವಿರುವ ಸ್ಲಾಟ್", "ಬೇರೆ ವೈದ್ಯರು ಸರಿ",
+        "कुछ भी चलेगा", "कोई भी चलेगा", "कोई भी समय चलेगा", "कोई भी समय", "कोई भी स्लॉट",
+        "जल्दी वाला", "जो भी हो", "कोई भी", "पहला उपलब्ध स्लॉट", "दूसरा डॉक्टर भी चलेगा",
     ]
     if any(t in text for t in indic_terms):
         return True
 
     patterns = [
-        r"\b(?:anything\s+is\s+(?:fine|ok|okay|good|alright|cool)|anyone\s+is\s+(?:fine|ok|okay|good|cool)|any\s+(?:doctor|slot|time)\s+is\s+(?:fine|ok|okay|good)|any\s+(?:slot|time|date)|anything\s+works|anyone\s+works|whichever|whatever\s+is\s+fine|whatever\s+works|earliest|earliest\s+available|first\s+available|whatever\s+is\s+available\s+first|the\s+earliest(?:\s+one)?|you\s+choose|you\s+decide|any\s+one|anyone|anything|any\s+time\s+is\s+(?:fine|ok|okay|good)|any\s+time)\b",
-        r"\b(?:edaina\s+parvaledu|edaina\s+pharvaledu|eppudaina\s+sare|eppudaina\s+parvaledu|ye\s+time\s+aina\s+(?:okay|ok|fine|parvaledu)|ye\s+samayamaina\s+parvaledu|koyi\s+bhi\s+samay|koi\s+bhi\s+samay|koyi\s+bhi\s+chalega|koi\s+bhi\s+chalega|endha\s+neramum\s+seri|yava\s+samayavadharu\s+sari)\b",
-        r"(?:ఏదైనా\s+పర్వాలేదు|ఏదైనా\s+ఫర్వాలేదు|ఎప్పుడైనా\s+సరే|ఎప్పుడైనా\s+పర్వాలేదు|ఏదైనా\s+సరే|ఏ\s+సమయమైనా\s+పర్వాలేదు|ఏ\s+సమయమైనా\s+సరే)",
-        r"(?:எதுவும்\s+பரவாயில்லை|எந்த\s+நேரமும்\s+சரி|எதுவும்\s+சரி)",
-        r"(?:ಯಾವುದಾದರೂ\s+ಸರಿ|ಯಾವ\s+ಸಮಯವಾದರೂ\s+ಸರಿ|ಯಾವುದಾದರೂ\s+ಪರವಾಗಿಲ್ಲ)",
-        r"(?:कुछ\s+भी\s+चलेगा|कोई\s+भी\s+चलेगा|कोई\s+भी\s+समय\s+चलेगा|कोई\s+भी\s+समय|कोई\s+भी\s+स्लॉट|जल्दी\s+वाला|जो\s+भी\s+हो|कोई\s+भी)",
+        r"\b(?:anything\s+is\s+(?:fine|ok|okay|good|alright|cool)|anyone\s+is\s+(?:fine|ok|okay|good|cool)|any\s+(?:doctor|slot|time|date)\s+is\s+(?:fine|ok|okay|good|alright)|any\s+(?:slot|time|date)|anything\s+works|anyone\s+works|whichever|whatever\s+is\s+fine|whatever\s+works)\b",
+        r"\b(?:any\s+time\s+is\s+fine(?:\.?\s*book\s+it)?|any\s+time\s+is\s+fine|anytime\s+is\s+fine|any\s+time|anytime)\b",
+        r"\b(?:earliest|earliest\s+available(?:\s+appointment|\s+slot)?|first\s+available(?:\s+appointment|\s+slot)?|whatever\s+is\s+available\s+first|the\s+earliest(?:\s+one)?)\b",
+        r"\b(?:next\s+available(?:\s+appointment|\s+slot)?|show\s+(?:me\s+)?(?:the\s+)?next\s+available(?:\s+slot|\s+appointment)?|book\s+(?:the\s+)?first\s+available(?:\s+appointment|\s+slot)?)\b",
+        r"\b(?:another\s+doctor\s+is\s+fine|other\s+doctor\s+is\s+fine|different\s+doctor\s+is\s+fine|any\s+doctor\s+is\s+fine)\b",
+        r"\b(?:no\s+preference|no\s+date\s+preference|no\s+time\s+preference|any\s+date\s+is\s+fine|any\s+day\s+is\s+fine)\b",
+        r"\b(?:you\s+choose|you\s+decide|any\s+one|anyone|anything)\b",
+        r"\b(?:edaina\s+parvaledu|edaina\s+pharvaledu|eppudaina\s+sare|eppudaina\s+parvaledu|ye\s+time\s+aina\s+(?:okay|ok|fine|parvaledu)|ye\s+samayamaina\s+parvaledu|vere\s+doctor\s+aina\s+parvaledu|modati\s+slot)\b",
+        r"\b(?:koyi\s+bhi\s+samay|koi\s+bhi\s+samay|koyi\s+bhi\s+chalega|koi\s+bhi\s+chalega|dusra\s+doctor\s+bhi\s+chalega|pahla\s+slot)\b",
+        r"\b(?:endha\s+neramum\s+seri|veru\s+maruthuvar\s+seri|mudhal\s+neram)\b",
+        r"\b(?:yava\s+samayavadharu\s+sari|bere\s+vaidyaru\s+sari|modala\s+slot)\b",
+        r"(?:ఏదైనా\s*(?:సమయమైనా|సమయం|టైమ్|టైమైనా)?\s*(?:పర్వాలేదు|ఫర్వాలేదు|సరే)|ఎప్పుడైనా\s*(?:పర్వాలేదు|ఫర్వాలేదు|సరే)|ఏ\s*సమయమైనా\s*(?:పర్వాలేదు|ఫర్వాలేదు|సరే)|మొదటి\s*అందుబాటులో\s*ఉన్న\s*స్లాట్|తొలి\s*స్లాట్|వేరే\s*డాక్టర్\s*అయినా\s*పర్వాలేదు)",
+        r"(?:எதுவும்\s*(?:நேரமும்)?\s*(?:பரவாயில்லை|சரி)|எந்த\s*நேரமும்\s*சரி|முதல்\s*நேரம்|வேறு\s*மருத்துவர்\s*சரி)",
+        r"(?:ಯಾವುದಾದರೂ\s*(?:ಸಮಯವಾದರೂ)?\s*(?:ಸರಿ|ಪರವಾಗಿಲ್ಲ)|ಯಾವ\s*ಸಮಯವಾದರೂ\s*ಸರಿ|ಮೊದಲ\s*ಸ್ಲಾಟ್|ಬೇರೆ\s*ವೈದ್ಯರು\s*ಸರಿ)",
+        r"(?:कुछ\s*भी\s*चलेगा|कोई\s*भी\s*(?:समय\s*)?चलेगा|कोई\s*भी\s*समय|कोई\s*भी\s*स्लॉट|जल्दी\s*वाला|जो\s*भी\s*हो|कोई\s*भी|दूसरा\s*डॉक्टर\s*भी\s*चलेगा|पहला\s*उपलब्ध\s*स्लॉट)",
     ]
     for p in patterns:
         if re.search(p, low, re.IGNORECASE):
@@ -1553,27 +1574,26 @@ def is_forgot_patient_ref_reply(text: str) -> bool:
 
 
 def extract_phone_number_candidate(text: str) -> Optional[str]:
-
-    """Extracts a valid 10-digit mobile phone candidate from a message."""
-
+    """Extracts a valid 10-digit mobile phone candidate from a message, including spoken/Indic words."""
     if not text:
-
         return None
 
+    try:
+        from app.services.patient_service import normalize_spoken_phone_number
+        spoken = normalize_spoken_phone_number(text)
+        if spoken:
+            return spoken
+    except Exception:
+        pass
+
     # 1. Match standard 10 digit Indian number with optional +91 or 91
-
     m = re.search(r"(?:\+?91[\s-]?)?([6-9]\d{9})\b", text)
-
     if m:
-
         return m.group(1)
 
     # 2. General 10-digit sequence
-
     m2 = re.search(r"\b(\d{10})\b", text)
-
     if m2:
-
         return m2.group(1)
 
     return None
@@ -2310,7 +2330,9 @@ LOCALIZED_MESSAGES: Dict[str, Dict[str, str]] = {
 
             "• Patient: {patient_reference}\n"
 
-            "• Doctor: {doctor_name} ({specialty})\n"
+            "• Doctor: {doctor_name}\n"
+
+            "• Department: {specialty}\n"
 
             "• Date & Time: {slot_display}\n"
 
@@ -2756,7 +2778,8 @@ LOCALIZED_MESSAGES: Dict[str, Dict[str, str]] = {
         "confirm_summary": (
             "దయచేసి మీ అపాయింట్\u200cమెంట్ వివరాలను సరిచూసి నిర్ధారించండి:\n"
             "• పేషెంట్: {patient_reference}\n"
-            "• డాక్టర్: {doctor_name} ({specialty})\n"
+            "• డాక్టర్: {doctor_name}\n"
+            "• విభాగం: {specialty}\n"
             "• సమయం: {slot_display}\n"
             "• కారణం: {reason_category}\n\n"
             "ఈ బుకింగ్ ఖరారు చేయడానికి దయచేసి 'అవును' అని చెప్పండి. మార్పులు లేదా రద్దు చేయడానికి 'వద్దు' అని చెప్పండి."
@@ -3119,7 +3142,8 @@ LOCALIZED_MESSAGES: Dict[str, Dict[str, str]] = {
         "confirm_summary": (
             "தயவுசெய்து உங்கள் முன்பதிவு விவரங்களைச் சரிபார்க்கவும்:\n"
             "• நோயாளி: {patient_reference}\n"
-            "• மருத்துவர்: {doctor_name} ({specialty})\n"
+            "• மருத்துவர்: {doctor_name}\n"
+            "• துறை: {specialty}\n"
             "• நேரம்: {slot_display}\n"
             "• காரணம்: {reason_category}\n\n"
             "முன்பதிவை உறுதிசெய்ய 'ஆம்' என்று கூறவும். மாற்ற அல்லது ரத்து செய்ய 'இல்லை' என்று கூறவும்."
@@ -3466,7 +3490,8 @@ LOCALIZED_MESSAGES: Dict[str, Dict[str, str]] = {
         "confirm_summary": (
             "ದಯವಿಟ್ಟು ನಿಮ್ಮ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ವಿವರಗಳನ್ನು ಪರಿಶೀಲಿಸಿ:\n"
             "• ರೋಗಿ: {patient_reference}\n"
-            "• ವೈದ್ಯರು: {doctor_name} ({specialty})\n"
+            "• ವೈದ್ಯರು: {doctor_name}\n"
+            "• ವಿಭಾಗ: {specialty}\n"
             "• ಸಮಯ: {slot_display}\n"
             "• ಕಾರಣ: {reason_category}\n\n"
             "ಈ ಬುಕಿಂಗ್ ಖಚಿತಪಡಿಸಲು 'ಹೌದು' ಎಂದು ಉತ್ತರಿಸಿ. ಬದಲಾವಣೆ ಅಥವಾ ರದ್ದು ಮಾಡಲು 'ಬೇಡ' ಎಂದು ತಿಳಿಸಿ."
@@ -3917,7 +3942,8 @@ LOCALIZED_MESSAGES: Dict[str, Dict[str, str]] = {
         "confirm_summary": (
             "कृपया अपनी अपॉइंटमेंट के विवरण की पुष्टि करें:\n"
             "• मरीज़: {patient_reference}\n"
-            "• डॉक्टर: {doctor_name} ({specialty})\n"
+            "• डॉक्टर: {doctor_name}\n"
+            "• विभाग: {specialty}\n"
             "• समय: {slot_display}\n"
             "• कारण: {reason_category}\n\n"
             "इस बुकिंग को कन्फर्म करने के लिए कृपया 'हाँ' कहें। बदलाव या रद्द करने के लिए 'नहीं' कहें।"
@@ -4115,7 +4141,12 @@ def format_localized_message(lang: str, key: str, **kwargs: Any) -> str:
 
     template = LOCALIZED_MESSAGES[lang_code].get(key) or LOCALIZED_MESSAGES["en"][key]
 
-    return template.format(**kwargs)
+    try:
+        return template.format(**kwargs)
+    except KeyError:
+        from collections import defaultdict
+        safe_kwargs = defaultdict(str, kwargs)
+        return template.format_map(safe_kwargs)
 
 
 
@@ -6273,6 +6304,63 @@ def match_slot_by_natural_language(
 
             slot_dt_list.append((None, s))
 
+    # Distinct slot dates sorted chronologically
+    slot_dates = sorted(list({dt.date() for dt, s in slot_dt_list if dt}))
+
+    is_day_after_tomorrow = (
+        any(w in text for w in ("ఎల్లుండి", "ನಾಡಿದ್ದು", "நாளை மறுநாள்", "परसों"))
+        or "day after tomorrow" in low
+        or "after tomorrow" in low
+        or "ellundi" in low
+    )
+    is_negated_tomorrow = (
+        any(w in text for w in ("రేపు కాదు", "कल नहीं", "நாளை அல்ல", "ನಾಳೆ அல்ல", "repu కాదు", "repu kadu", "repu kaadu"))
+        or "not tomorrow" in low
+    )
+    is_tomorrow = (
+        (any(w in text for w in ("రేపు", "tomorrow", "कल", "நாளை", "ನಾಳೆ")) or "tomorrow" in low or "repu" in low)
+        and not is_negated_tomorrow
+        and not is_day_after_tomorrow
+    )
+    is_today = (
+        any(w in text for w in ("ఈ రోజు", "ఈరోజు", "నేడు", "today", "आज", "இன்று", "ಇಂದು"))
+        or "today" in low
+    )
+
+    preferred_date = None
+    if is_day_after_tomorrow and len(slot_dates) >= 2:
+        preferred_date = slot_dates[1]
+    elif is_tomorrow and slot_dates:
+        preferred_date = slot_dates[0]
+    elif is_today and slot_dates:
+        preferred_date = slot_dates[0]
+
+    if preferred_date is not None:
+        date_filtered_slots = [(dt, s) for dt, s in slot_dt_list if dt and dt.date() == preferred_date]
+        if date_filtered_slots:
+            slot_dt_list = date_filtered_slots
+
+    # Weekday detection (e.g. 'Next Monday afternoon slot ఉందా?')
+    weekday_names = {
+        "monday": 0, "mon": 0, "somavaram": 0, "సోమవారం": 0, "సోమవారము": 0, "सोमवार": 0, "திங்கள்": 0, "ಸೋಮವಾರ": 0,
+        "tuesday": 1, "tue": 1, "mangalavaram": 1, "మంగళవారం": 1, "మంగళవారము": 1, "मंगलवार": 1, "செவ்வாய்": 1, "ಮಂಗಳವಾರ": 1,
+        "wednesday": 2, "wed": 2, "budhavaram": 2, "బుధవారం": 2, "బుధవారము": 2, "बुधवार": 2, "புதன்": 2, "ಬುಧವಾರ": 2,
+        "thursday": 3, "thu": 3, "thur": 3, "guruvaram": 3, "గురువారం": 3, "గురువారము": 3, "गुरुवार": 3, "வியாழன்": 3, "ಗುರುವಾರ": 3,
+        "friday": 4, "fri": 4, "sukravaram": 4, "శుక్రవారం": 4, "శుక్రవారము": 4, "शुक्रवार": 4, "வெள்ளி": 4, "ಶುಕ್ರವಾರ": 4,
+        "saturday": 5, "sat": 5, "sanivaram": 5, "శనివారం": 5, "శనివారము": 5, "शनिवार": 5, "சனி": 5, "ಶನಿವಾರ": 5,
+        "sunday": 6, "sun": 6, "adivaram": 6, "ఆదివారం": 6, "ఆదివారము": 6, "रविवार": 6, "ஞாயிறு": 6, "ಭಾನುವಾರ": 6,
+    }
+    target_weekday = None
+    for w_name, w_num in weekday_names.items():
+        if re.search(rf"\b{re.escape(w_name)}\b", low) or (not w_name.isascii() and w_name in text):
+            target_weekday = w_num
+            break
+
+    if target_weekday is not None:
+        weekday_slots = [(dt, s) for dt, s in slot_dt_list if dt and dt.weekday() == target_weekday]
+        if weekday_slots:
+            slot_dt_list = weekday_slots
+
 
 
     # 3. Relative time-of-day phrases
@@ -6297,83 +6385,89 @@ def match_slot_by_natural_language(
 
 
 
-    if re.search(r"\b(morning|tomorrow\s+morning|ఉదయం|सुबह|காலை|ಬೆಳಿಗ್ಗೆ)\b", low):
+    # Check relative time-of-day phrases
+    # If explicit time is also given in the sentence (e.g. '10 AM', '11:00', '10 gantala'), prioritize explicit time
+    has_explicit_clock_time = bool(
+        re.search(r"\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b", low)
+        or re.search(r"\b\d{1,2}:\d{2}\b", low)
+        or re.search(r"\b\d{1,2}(?::\d{2})?\s*(?:గంటలకు|గంటలకి|గంటలు|gantala|gantalaku|gantalu|baje|ghante)", low)
+    )
 
-        for dt, s in slot_dt_list:
+    if not has_explicit_clock_time:
+        if re.search(r"\b(morning|tomorrow\s+morning|udayam|ఉదయం|सुबह|காலை|ಬೆಳಿಗ್ಗೆ)\b", low):
+            for dt, s in slot_dt_list:
+                if dt and dt.hour < 12:
+                    return s
 
-            if dt and dt.hour < 12:
+        if re.search(r"\b(afternoon|madhyahnam|madhyanam|మధ్యాహ్నం|दोपहर|மதியம்|ಮಧ್ಯಾಹ್ನ)\b", low):
+            for dt, s in slot_dt_list:
+                if dt and 12 <= dt.hour < 17:
+                    return s
 
-                return s
+        if re.search(r"\b(evening|sayantram|sayanthram|సాయంత్రం|शाम|மாலை|ಸಂಜೆ)\b", low):
+            for dt, s in slot_dt_list:
+                if dt and dt.hour >= 17:
+                    return s
 
+    # 4. Explicit 12-hour or 24-hour time in message with negation filtering (e.g. '10 AM కాదు, 11 AM కావాలి')
+    slot_negation_re = re.compile(
+        r"^\s*(?:కాదు|వద్దు|వద్దండి|కాదండి|వద్దులెండి|kadu|kaadu|vaddu|vaddhu|not|no|nahi|illai|beda)(?:[^\w]|$)",
+        re.IGNORECASE,
+    )
+    time_candidates: List[Tuple[int, int, bool]] = []
 
+    # 12-hour AM/PM patterns
+    for m in re.finditer(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", low):
+        h = int(m.group(1))
+        min_val = int(m.group(2)) if m.group(2) else 0
+        ampm = m.group(3).lower()
+        if ampm == "pm" and h < 12:
+            h += 12
+        elif ampm == "am" and h == 12:
+            h = 0
+        trailing = text[m.end():m.end() + 25]
+        is_neg = bool(slot_negation_re.search(trailing))
+        leading = text[max(0, m.start() - 15):m.start()]
+        if re.search(r"\b(?:not|no|nahi)\s+$", leading, re.IGNORECASE):
+            is_neg = True
+        time_candidates.append((h, min_val, is_neg))
 
-    if re.search(r"\b(afternoon|మధ్యాహ్నం|दोपहर|மதியம்|ಮಧ್ಯಾಹ್ನ)\b", low):
+    # Indic / transliterated time patterns
+    for m in re.finditer(r"(\d{1,2})(?::(\d{2}))?\s*(?:గంటలకు|గంటలకి|గంటలు|gantala|gantalaku|gantalu|baje|baje\s*ko|ghante|mani|manikku)", low):
+        h = int(m.group(1))
+        min_val = int(m.group(2)) if m.group(2) else 0
+        is_pm = any(w in low for w in ("మధ్యాహ్నం", "afternoon", "madhyahnam", "madhyanam", "సాయంత్రం", "evening", "sayantram", "sayanthram", "రాత్రి", "night", "दोपहर", "शाम", "மதியம்", "மாலை", "ಮಧ್ಯಾಹ್ನ", "ಸಂಜೆ"))
+        is_am = any(w in low for w in ("ఉదయం", "morning", "udayam", "காலை", "ಬೆಳಿಗ್ಗೆ", "सुबह"))
+        if is_pm and h < 12:
+            h += 12
+        elif is_am and h == 12:
+            h = 0
+        elif not is_am and not is_pm and h <= 6:
+            h += 12
+        trailing = text[m.end():m.end() + 25]
+        is_neg = bool(slot_negation_re.search(trailing))
+        leading = text[max(0, m.start() - 15):m.start()]
+        if re.search(r"\b(?:not|no|nahi)\s+$", leading, re.IGNORECASE):
+            is_neg = True
+        time_candidates.append((h, min_val, is_neg))
 
-        for dt, s in slot_dt_list:
-
-            if dt and 12 <= dt.hour < 17:
-
-                return s
-
-
-
-    if re.search(r"\b(evening|సాయంత్రం|शाम|மாலை|ಸಂಜೆ)\b", low):
-
-        for dt, s in slot_dt_list:
-
-            if dt and dt.hour >= 17:
-
-                return s
-
-
-
-    # 4. Explicit 12-hour or 24-hour time in message
-
-    time_pat = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", low)
-
-    time_24_pat = re.search(r"(\d{1,2}):(\d{2})", low)
-
-
+    # 24-hour patterns
+    if not time_candidates:
+        for m in re.finditer(r"\b(\d{1,2}):(\d{2})\b", low):
+            h = int(m.group(1))
+            min_val = int(m.group(2))
+            is_pm = bool(re.search(r"(మధ్యాహ్నం|afternoon|madhyahnam|సాయంత్రం|evening|sayantram|दोपहर|शाम|மதியம்|மாலை|ಮಧ್ಯಾಹ್ನ|ಸಂಜೆ|రాత్రి|night)", low))
+            if is_pm and h < 12:
+                h += 12
+            trailing = text[m.end():m.end() + 25]
+            is_neg = bool(slot_negation_re.search(trailing))
+            time_candidates.append((h, min_val, is_neg))
 
     target_hour = None
-
     target_minute = 0
-
-    if time_pat:
-
-        h = int(time_pat.group(1))
-
-        m = int(time_pat.group(2)) if time_pat.group(2) else 0
-
-        ampm = time_pat.group(3).lower()
-
-        if ampm == "pm" and h < 12:
-
-            h += 12
-
-        elif ampm == "am" and h == 12:
-
-            h = 0
-
-        target_hour = h
-
-        target_minute = m
-
-    elif time_24_pat:
-
-        h = int(time_24_pat.group(1))
-
-        m = int(time_24_pat.group(2))
-
-        is_pm_indicator = bool(re.search(r"(మధ్యాహ్నం|afternoon|दोपहर|மதியம்|ಮಧ್ಯಾಹ್ನ|సాయంత్రం|evening|शाम|மாலை|ಸಂಜೆ|రాత్రి|night)", low))
-
-        if is_pm_indicator and h < 12:
-
-            h += 12
-
-        target_hour = h
-
-        target_minute = m
+    affirmative_times = [c for c in time_candidates if not c[2]]
+    if affirmative_times:
+        target_hour, target_minute, _ = affirmative_times[0]
 
 
 
@@ -6485,7 +6579,8 @@ def match_slot_by_natural_language(
 
                 return s
 
-
+    if preferred_date is not None and slot_dt_list and slot_dt_list[0][1]:
+        return slot_dt_list[0][1]
 
     return None
 
@@ -6932,6 +7027,24 @@ MULTILINGUAL_DOCTOR_KEYWORDS: List[Dict[str, Any]] = [
     },
 
 ]
+
+
+
+def matches_doctor_name(query: str, display_name: str) -> bool:
+    """Matches a doctor query (in English or Indic scripts) with a doctor display name."""
+    if not query or not display_name:
+        return False
+    q = query.strip().lower()
+    disp = display_name.strip().lower()
+    if q in disp or disp in q:
+        return True
+    for entry in MULTILINGUAL_DOCTOR_KEYWORDS:
+        st = entry["search_term"].lower()
+        kws = [kw.lower() for kw in entry["keywords"]]
+        if st in disp or any(kw in disp for kw in kws):
+            if any(kw in q for kw in kws) or q in kws:
+                return True
+    return False
 
 
 
@@ -7537,7 +7650,9 @@ def detect_explicit_specialty_request(text: str) -> Optional[str]:
 
     as opposed to merely mentioning a symptom like 'headache' or 'తలనొప్పి'.
 
-    Uses normalized typo-tolerant matching and controlled synonym map.
+    Uses normalized typo-tolerant matching and controlled synonym map with negation filtering
+
+    (e.g. 'నాకు general physician కావాలి, cardiology కాదు' returns 'General Medicine').
 
     """
 
@@ -7545,35 +7660,55 @@ def detect_explicit_specialty_request(text: str) -> Optional[str]:
 
         return None
 
+    spec_negation_re = re.compile(
+        r"^\s*(?:కాదు|వద్దు|వద్దండి|కాదండి|వద్దులెండి|kadu|kaadu|vaddu|vaddhu|not|no|nahi|illai|beda)(?:[^\w]|$)",
+        re.IGNORECASE,
+    )
 
+    candidates: List[Tuple[int, str, bool]] = []
 
-    # Typo-tolerant normalization first
-
-    normalized = normalize_specialty_term(text)
-
-    if normalized:
-
-        return normalized
-
-
-
-    low = text.lower()
-
+    # Check explicit specialty keywords
     for spec, keywords in EXPLICIT_SPECIALTY_DEPARTMENT_KEYWORDS.items():
-
         for kw in keywords:
+            pattern = rf"\b{re.escape(kw)}\b" if kw.isascii() else re.escape(kw)
+            for m in re.finditer(pattern, text, re.IGNORECASE):
+                trailing = text[m.end():m.end() + 25]
+                is_neg = bool(spec_negation_re.search(trailing))
+                leading = text[max(0, m.start() - 15):m.start()]
+                if re.search(r"\b(?:not|no|nahi)\s+$", leading, re.IGNORECASE):
+                    is_neg = True
+                candidates.append((m.start(), spec, is_neg))
 
-            if kw.isascii():
+    # Also check normalized specialty regexes
+    extra_spec_pats = [
+        ("Cardiology", [r"\b(?:cardio|cardioligist|cardiologist|cardiology|cardiolgy|heart\s*specialist|heart\s*doctor)\b", r"కార్డియాలజీ", r"కార్డియాలజిస్ట్", r"గుండె డాక్టర్"]),
+        ("Neurology", [r"\b(?:neuro|neurologest|neurologist|neurology|brain\s*specialist|nerve\s*specialist)\b", r"న్యూరాలజీ", r"న్యూరాలజిస్ట్", r"నరాల డాక్టర్"]),
+        ("Orthopedics", [r"\b(?:ortho|orthopedist|orthopedic|orthopedics|bone\s*specialist|joint\s*specialist)\b", r"ఆర్థోపెడిక్స్", r"ఎముకల డాక్టర్"]),
+        ("Pediatrics", [r"\b(?:paediatrician|paediatrics|pediatrician|pediatrics|child\s*specialist)\b", r"పీడియాట్రిక్స్", r"పిల్లల డాక్టర్"]),
+        ("Dermatology", [r"\b(?:dermatologist|dermatology|skin\s*specialist|skin\s*doctor)\b", r"డెర్మటాలజీ", r"చర్మ డాక్టర్"]),
+        ("General Medicine", [r"\b(?:general\s*medicine|general\s*physician|physician|internal\s*medicine|family\s*doctor)\b", r"జనరల్ మెడిసిన్", r"సాధారణ వైద్యం", r"జనరల్ ఫిజీషియన్"]),
+    ]
+    for spec, pats in extra_spec_pats:
+        for pat in pats:
+            for m in re.finditer(pat, text, re.IGNORECASE):
+                trailing = text[m.end():m.end() + 25]
+                is_neg = bool(spec_negation_re.search(trailing))
+                leading = text[max(0, m.start() - 15):m.start()]
+                if re.search(r"\b(?:not|no|nahi)\s+$", leading, re.IGNORECASE):
+                    is_neg = True
+                candidates.append((m.start(), spec, is_neg))
 
-                if re.search(rf"\b{re.escape(kw)}\b", low):
+    if candidates:
+        candidates.sort(key=lambda x: x[0])
+        affirmative = [c[1] for c in candidates if not c[2]]
+        if affirmative:
+            return affirmative[0]
+        return None
 
-                    return spec
-
-            else:
-
-                if kw in text:
-
-                    return spec
+    # Typo-tolerant normalization fallback if no candidates found
+    normalized = normalize_specialty_term(text)
+    if normalized:
+        return normalized
 
     return None
 
@@ -7588,7 +7723,11 @@ EXPLICIT_DOCTOR_STOPWORDS = {
     "names", "hospital", "chahiye", "veendum", "beku", "vendi", "theva", "venum",
     "specialist", "consultation", "time", "fee", "cost", "today", "tomorrow",
     "near", "best", "good", "any", "anyone", "someone", "please", "can", "you",
-    "book", "schedule", "cheyandi", "karo", "pannunga", "madi", "undi", "undhi"
+    "book", "schedule", "cheyandi", "karo", "pannunga", "madi", "undi", "undhi", "అపాయింట్మెంట్", "అపాయింట్‌మెంట్", "అపాయింట్మెంట్స్", "అపాయింట్మెంట్లు", "బుకింగ్", "స్లాట్", "స్లాట్లు", "మార్చండి", "మార్పు", "మార్చు", "బదలాయించండి", "మార్చగలరా", "మారండి", "పరిశీలించండి", "చెక్", "ఉందా", "ఉన్నారా", "అందుబాటులో", "అందుబాటు", "change", "switch", "different", "another", "check", "lookup", "find", "see", "verify",
+    "చెప్పండి", "చేసి", "వివరాలు", "వివరం", "ముందు", "చేయడానికి", "చేయటానికి", "తెలియజేయండి",
+    "తెలుపండి", "చూపించండి", "చూడండి", "ఇవ్వండి", "కనుగొనండి", "చెప్పగలరా", "చెప్పు", "చెపు",
+    "కాదు", "వద్దు", "kadu", "kaadu", "vaddu", "ఆ", "ఆయన", "ఆవిడ", "అదే", "information",
+    "info", "tell", "give", "show", "ni", "nu", "తో", "తోనే", "తోటి", "తోని", "గారితో", "గారితోనే", "వారితో", "వారితోనే", "గురించి", "same", "that"
 }
 
 EXPLICIT_DOCTOR_SPECIALTY_WORDS = {
@@ -7601,8 +7740,34 @@ EXPLICIT_DOCTOR_SPECIALTY_WORDS = {
 }
 
 EXPLICIT_DOCTOR_HONORIFICS = [
-    "గారితో", "గారికి", "గారు", "గారి", "తో", "జీ", "जी", "साहब", "அவர்கள்", "உடன்", "ಅವರೊಂದಿಗೆ", "ಅವರ"
+    "గారితోనే", "గారితో", "గారికి", "గారు", "గారి", "వారితోనే", "వారితో", "తోనే", "తోటి", "తోని", "తో", "జీ", "जी", "साहब", "அவர்கள்", "உடன்", "ಅವರೊಂದಿಗೆ", "ಅವರ"
 ]
+
+
+
+def is_change_doctor_intent(text: str) -> bool:
+    """Detects explicit user request to change, replace, or switch the selected doctor."""
+    if not text:
+        return False
+    low = text.strip().lower()
+    change_patterns = [
+        r"\b(?:change|switch|different|another)\s+(?:doctor|physician|dr)\b",
+        r"\b(?:doctor|dr|డాక్టర్|డాక్టరు)(?:\s+(?:ni|nu|gari|garini|anniti))?\s+(?:change|switch|marchandi|marchu|marusthara|badal|badlo)\b",
+        r"\b(?:doctornu|doctorni)\s+(?:change|switch|marchandi|marchu)\b",
+        r"\b(?:different\s+doctor|another\s+doctor)\b",
+    ]
+    for p in change_patterns:
+        if re.search(p, low):
+            return True
+    indic_change_terms = [
+        "డాక్టర్ మార్చండి", "డాక్టర్‌ని మార్చండి", "డాక్టర్ ను మార్చండి", "డాక్టరు మార్చండి",
+        "డాక్టర్ మార్చు", "వేరే డాక్టర్", "ఇంకో డాక్టర్", "మరో డాక్టర్", "డాక్టర్ ని మార్చండి",
+        "డాక్టరుని మార్చండి", "డాక్టర్ మార్పు",
+        "डॉक्टर बदलें", "दूसरा डॉक्टर", "डॉक्टर बदलो",
+        "மருத்துவரை மாற்றவும்", "வேறு மருத்துவர்",
+        "ವೈದ್ಯರನ್ನು ಬದಲಾಯಿಸಿ", "ಬೇರೆ ವೈದ್ಯರು",
+    ]
+    return any(t in text for t in indic_change_terms)
 
 
 def extract_explicit_doctor_name(text: str) -> Optional[str]:
@@ -7610,22 +7775,40 @@ def extract_explicit_doctor_name(text: str) -> Optional[str]:
     Extracts explicitly named doctor from user input across English, Telugu, Hindi, Tamil, and Kannada.
     Distinguishes explicit doctor names (e.g. 'డాక్టర్ జగ్గయ్య', 'Dr. Jaggayya', 'Dr. Rajesh Sharma') from clinical specialty requests
     (e.g. 'I want to see a cardiologist', 'see a neurologist', 'I need a doctor for fever', 'నాకు డాక్టర్ కావాలి').
+    Handles negation filtering (e.g. 'Dr. Rajesh కాదు, Dr. Sunita కావాలి' returns 'Sunita').
     """
     if not text:
         return None
+    if is_change_doctor_intent(text):
+        return None
+
+    negation_tokens = {"కాదు", "వద్దు", "వద్దండి", "కాదండి", "వద్దులెండి", "kadu", "kaadu", "vaddu", "vaddhu", "not", "no", "nahi", "illai", "beda"}
+    negation_re = re.compile(r"^\s*(?:కాదు|వద్దు|వద్దండి|కాదండి|వద్దులెండి|kadu|kaadu|vaddu|vaddhu|not|no|nahi|illai|beda)(?:[^\w]|$)", re.IGNORECASE)
+
     patterns = [
         r'(?:dr\.?|doctor|డాక్టర్|డాక్టరు|డాక్టర్\s+గారు|డాక్టరు\s+గారు|डॉक्टर|डाక్టర్|டாக்டர்|ಡಾಕ್ಟರ್)\s+([A-Za-z\u0C00-\u0C7F\u0900-\u097F\u0B80-\u0BFF\u0C80-\u0CFF]+(?:\s+[A-Za-z\u0C00-\u0C7F\u0900-\u097F\u0B80-\u0BFF\u0C80-\u0CFF]+)?)',
         r'(?:with|see|consult)\s+(?:dr\.?|doctor)\s+([A-Za-z\u0C00-\u0C7F\u0900-\u097F\u0B80-\u0BFF\u0C80-\u0CFF]+(?:\s+[A-Za-z\u0C00-\u0C7F\u0900-\u097F\u0B80-\u0BFF\u0C80-\u0CFF]+)?)',
         r'([A-Za-z\u0C00-\u0C7F]+)\s*గారితో',
         r'([A-Za-z\u0900-\u097F]+)\s*జీ\s*కే\s*साथ',
     ]
+
+    candidates: List[Tuple[str, bool]] = []
     for pat in patterns:
-        m = re.search(pat, text, re.IGNORECASE)
-        if m:
+        for m in re.finditer(pat, text, re.IGNORECASE):
             raw = m.group(1).strip()
-            parts = raw.split()
+            raw_words = raw.split()
+            is_neg = any(w.lower() in negation_tokens for w in raw_words)
+
+            trailing = text[m.end():m.end() + 25]
+            if negation_re.search(trailing):
+                is_neg = True
+
+            leading = text[max(0, m.start() - 15):m.start()]
+            if re.search(r"\b(?:not|no|nahi)\s+$", leading, re.IGNORECASE):
+                is_neg = True
+
             valid_parts = []
-            for p in parts:
+            for p in raw_words:
                 cleaned_p = p
                 while True:
                     changed = False
@@ -7641,17 +7824,28 @@ def extract_explicit_doctor_name(text: str) -> Optional[str]:
                     and cleaned_p.lower() not in EXPLICIT_DOCTOR_STOPWORDS
                     and cleaned_p.lower() not in EXPLICIT_DOCTOR_SPECIALTY_WORDS
                     and cleaned_p not in EXPLICIT_DOCTOR_HONORIFICS
+                    and cleaned_p.lower() not in negation_tokens
                 ):
                     valid_parts.append(cleaned_p)
+
             if not valid_parts:
                 continue
             res = " ".join(valid_parts)
             if len(res) >= 2:
-                return res
+                candidates.append((res, is_neg))
+
+    affirmative = [c[0] for c in candidates if not c[1]]
+    if affirmative:
+        return affirmative[0]
     return None
 
 
 def detect_doctor_query(text: str) -> Optional[str]:
+
+    # Check for explicitly named doctor first with negation filtering (e.g., 'Dr. Rajesh కాదు, Dr. Sunita కావాలి')
+    explicit = extract_explicit_doctor_name(text)
+    if explicit:
+        return explicit
 
     low = text.lower()
 
@@ -7671,8 +7865,7 @@ def detect_doctor_query(text: str) -> Optional[str]:
 
                     return entry["search_term"]
 
-    # Check for explicitly named doctor (e.g., 'doctor జగ్గయ్య', 'Dr. Jaggayya')
-    return extract_explicit_doctor_name(text)
+    return None
 
 
 
@@ -8321,7 +8514,10 @@ def ensure_response_in_session_language(
     draft = session_state.draft
 
     if lang not in ("te", "ta", "kn", "hi"):
-
+        if lang == "en" and reply:
+            script = detect_script_language(reply)
+            if script and script in ("te", "ta", "kn", "hi") and not any(("a" <= ch <= "z") or ("A" <= ch <= "Z") for ch in reply):
+                return format_localized_message("en", "how_to_book")
         return reply
 
 
@@ -8485,36 +8681,122 @@ class MockReasoningAdapter(BaseReasoningAdapter):
     ) -> AgentAction:
 
         msg = user_message.strip()
-
         draft = session_state.draft
 
-        session_state.language = detect_language(msg, session_state.language)
-
+        resolved_l, resolved_m = resolve_adaptive_language(
+            msg,
+            current_session_language=session_state.language,
+            language_mode=getattr(session_state, "language_mode", "auto"),
+            preferred_language=getattr(session_state, "preferred_language", None),
+        )
+        session_state.language = resolved_l
+        session_state.language_mode = resolved_m
         lang = session_state.language
 
-
-
         # 0. Check if user is explicitly switching language mid-conversation
-
-        explicit_lang, remaining_after_lang_switch = detect_explicit_language_switch(msg)
-
-        if explicit_lang in SUPPORTED_LANGUAGES:
-
-            session_state.language = explicit_lang
-
-            lang = explicit_lang
-
-            if not remaining_after_lang_switch:
-
-                return AgentAction(reply=build_localized_prompt_for_current_state(session_state))
-
-            msg = remaining_after_lang_switch
+        cmd_lang, cmd_mode, remaining_after_lang_switch = detect_explicit_language_command(msg)
+        if cmd_lang:
+            if cmd_lang == "auto":
+                session_state.language_mode = "auto"
+                session_state.preferred_language = None
+                if not remaining_after_lang_switch:
+                    auto_confirm_msg = {
+                        "en": "Switched to automatic language detection mode.",
+                        "te": "ఆటోమేటిక్ భాషా గుర్తింపు మోడ్‌కు మార్చబడింది.",
+                        "hi": "स्वचालित भाषा पहचान मोड पर स्विच किया गया।",
+                        "ta": "தானியங்கி மொழி கண்டறிதல் பயன்முறைக்கு மாற்றப்பட்டது.",
+                        "kn": "ಸ್ವಯಂಚಾಲಿತ ಭಾಷಾ ಪತ್ತೆ ಮೋಡ್‌ಗೆ ಬದಲಾಯಿಸಲಾಗಿದೆ.",
+                    }
+                    return AgentAction(reply=auto_confirm_msg.get(lang, auto_confirm_msg["en"]))
+                msg = remaining_after_lang_switch
+            elif cmd_lang in SUPPORTED_LANGUAGES:
+                session_state.language = cmd_lang
+                session_state.language_mode = "manual"
+                session_state.preferred_language = cmd_lang
+                lang = cmd_lang
+                if not remaining_after_lang_switch:
+                    return AgentAction(reply=build_localized_prompt_for_current_state(session_state))
+                msg = remaining_after_lang_switch
 
 
 
         lower = msg.lower()
 
 
+
+        # 1-pbd. Pre-booking Doctor Details & Information Inquiry (e.g. 'Appointment book చేయడానికి ముందు doctor details చెప్పండి')
+        is_doc_info_req = bool(
+            re.search(r"\b(?:doctor\s+details|physician\s+details|about\s+the\s+doctor|doctor\s+info|doctor\s+credentials|doctor\s+information)\b", lower)
+            or any(w in msg for w in ("డాక్టర్ వివరాలు", "వైద్యుల వివరాలు", "డాక్టర్ గురించి", "డాక్టర్ ఇన్ఫో", "ముందు doctor details", "doctor details చెప్పండి", "doctor details"))
+        )
+        if is_doc_info_req:
+            if draft.doctor_name:
+                doc_spec = draft.specialty or "నిపుణులు"
+                reply = (
+                    f"డాక్టర్ {draft.doctor_name} గారు {doc_spec} విభాగంలో ప్రముఖ వైద్యులు. మీరు ఈ అపాయింట్‌మెంట్‌ను నిర్ధారించి బుక్ చేయాలనుకుంటున్నారా?"
+                    if lang == "te"
+                    else f"Dr. {draft.doctor_name} is an experienced specialist in {doc_spec}. Would you like to confirm and proceed with booking this appointment?"
+                )
+            elif draft.specialty:
+                reply = (
+                    f"{draft.specialty} విభాగంలో మా వద్ద అనుభవజ్ఞులైన నిపుణులు అందుబాటులో ఉన్నారు. మీకు ఏ వైద్యుని వివరాలు కావాలో తెలియజేయండి."
+                    if lang == "te"
+                    else f"We have experienced specialists in {draft.specialty}. Which doctor's details would you like to know?"
+                )
+            else:
+                reply = (
+                    "మీకు ఏ డాక్టర్ లేదా విభాగం వివరాలు కావాలో తెలియజేయండి."
+                    if lang == "te"
+                    else "Please let me know which doctor or department details you would like to know."
+                )
+            return AgentAction(reply=reply, tool_call=None)
+
+        # 1-avail. Doctor Availability Inquiry (e.g. 'Doctor availability check చేసి చెప్పండి')
+        is_avail_check = bool(
+            re.search(r"\b(?:check\s+doctor\s+availability|doctor\s+availability|check\s+availability|availability\s+check)\b", lower)
+            or any(w in msg for w in ("availability check", "అందుబాటు చెక్", "అందుబాటులో ఉన్నారా", "డాక్టర్ అందుబాటు", "డాక్టర్ availability"))
+        )
+        if is_avail_check and not draft.doctor_id and not draft.specialty and not self._detect_doctor_query(msg) and not self._detect_specialty(msg):
+            reply = (
+                "తప్పకుండా, ఏ వైద్యుడు లేదా విభాగానికి సంబంధించిన అందుబాటు వివరాలు (availability) కావాలో తెలియజేయండి."
+                if lang == "te"
+                else "Certainly, which doctor or department's availability would you like to check?"
+            )
+            return AgentAction(reply=reply, tool_call=None)
+
+        # 1-follow. Support follow-up references ('ఆ డాక్టర్', 'same doctor', 'ఆ టైమ్', 'same time', 'అదే appointment')
+        has_same_doc = bool(
+            re.search(r"\b(?:same\s+doctor|that\s+doctor)\b", lower)
+            or any(w in msg for w in ("ఆ డాక్టర్", "ఆ డాక్టరు", "ఆయనతోనే", "ఆవిడతోనే", "అదే డాక్టర్"))
+        )
+        has_same_slot = bool(
+            re.search(r"\b(?:same\s+time|that\s+time|that\s+slot|same\s+slot|same\s+appointment)\b", lower)
+            or any(w in msg for w in ("ఆ టైమ్", "ఆ సమయం", "ఆ స్లాట్", "అదే appointment", "అదే సమయం", "అదే అపాయింట్మెంట్"))
+        )
+
+        # 1-cd. Check for explicit change doctor intent
+        if is_change_doctor_intent(msg):
+            draft.doctor_id = None
+            draft.doctor_name = None
+            draft.slot_id = None
+            draft.slot_start_time = None
+            session_state.confirmation_status = ConfirmationStatus.NONE
+            session_state.confirmed_draft_fingerprint = None
+            session_state.step = ConversationStep.COLLECTING_DOCTOR
+            session_state.pending_action = None
+            session_state.pending_action_data = {}
+            if draft.specialty and "search_doctors" in available_tools:
+                return AgentAction(
+                    reply=format_localized_message(lang, "searching_specialty", specialty=draft.specialty),
+                    tool_call=ToolCallIntent(
+                        tool_name="search_doctors",
+                        arguments={"specialty_or_department": draft.specialty},
+                    ),
+                )
+            return AgentAction(
+                reply=format_localized_message(lang, "ask_doctor_or_specialty"),
+                tool_call=None,
+            )
 
         # 1. Check for cancellation intent
 
@@ -9562,6 +9844,42 @@ class MockReasoningAdapter(BaseReasoningAdapter):
                     tool_call=None,
 
                 )
+
+            elif "get_available_slots" in available_tools:
+
+                target_doc = draft.doctor_id
+
+                if not target_doc:
+
+                    docs = get_offered_doctors_from_session(session_state)
+
+                    if docs:
+
+                        target_doc = docs[0].get("doctor_id")
+
+                        draft.doctor_id = target_doc
+
+                        draft.doctor_name = docs[0].get("display_name")
+
+                if target_doc:
+
+                    return AgentAction(
+
+                        reply=format_localized_message(
+
+                            lang, "checking_slots", doctor_name=draft.doctor_name or "the doctor"
+
+                        ),
+
+                        tool_call=ToolCallIntent(
+
+                            tool_name="get_available_slots",
+
+                            arguments={"doctor_id": target_doc, "time_range": None},
+
+                        ),
+
+                    )
 
 
 
@@ -11781,8 +12099,13 @@ class GeminiReasoningAdapter(BaseReasoningAdapter):
 
 
         # If a pending action was offered (e.g. SHOW_SLOTS_FOR_DOCTOR) and the patient replies affirmatively ('సరే', 'okay')
+        matches_pending_doctor = False
+        if session_state.pending_action == "SHOW_SLOTS_FOR_DOCTOR" and doc_search_term:
+            pending_doc_name = (session_state.pending_action_data or {}).get("doctor_name") or session_state.draft.doctor_name or ""
+            if matches_doctor_name(doc_search_term, pending_doc_name):
+                matches_pending_doctor = True
 
-        if is_contextual_affirmative(msg) and not doc_search_term and not ordinal_doc and not session_state.draft.is_complete():
+        if is_contextual_affirmative(msg) and (not doc_search_term or matches_pending_doctor) and not ordinal_doc and not session_state.draft.is_complete():
 
             pending_act = session_state.pending_action
 
@@ -12530,17 +12853,13 @@ class GeminiReasoningAdapter(BaseReasoningAdapter):
 
                         slots = tool_result.data
 
-                        slot_lines = "\n".join([f"• {format_human_slot_time(s['start_time'], lang=lang)}" for s in slots[:4]])
-
-                        concise_reply = format_localized_message(
-
-                            lang, "available_slots",
+                        concise_reply = format_conversational_slots(
 
                             doctor_name=session_state.draft.doctor_name or "the doctor",
 
-                            slot_lines=slot_lines,
+                            slots=slots,
 
-                            example_slot=slots[0]["slot_id"],
+                            lang=lang,
 
                         )
 

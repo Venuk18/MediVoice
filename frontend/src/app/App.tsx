@@ -2,10 +2,34 @@ import React from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { PlatformProvider, usePlatform } from './PlatformContext';
 import { TopNav } from '../components/TopNav';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { PatientWebsiteView } from '../features/patient/PatientWebsiteView';
-import { DoctorWorkspaceView } from '../features/doctor/DoctorWorkspaceView';
-import { LaboratoryWorkspaceView } from '../features/laboratory/LaboratoryWorkspaceView';
-import { MaintenanceWorkspaceView } from '../features/maintenance/MaintenanceWorkspaceView';
+
+// Route-based code-split lazy loading for internal staff workspaces
+const DoctorWorkspaceView = React.lazy(() =>
+  import('../features/doctor/DoctorWorkspaceView').then((m) => ({ default: m.DoctorWorkspaceView }))
+);
+const LaboratoryWorkspaceView = React.lazy(() =>
+  import('../features/laboratory/LaboratoryWorkspaceView').then((m) => ({ default: m.LaboratoryWorkspaceView }))
+);
+const MaintenanceWorkspaceView = React.lazy(() =>
+  import('../features/maintenance/MaintenanceWorkspaceView').then((m) => ({ default: m.MaintenanceWorkspaceView }))
+);
+const JudgeDemoWorkspaceView = React.lazy(() =>
+  import('../features/demo/JudgeDemoWorkspaceView').then((m) => ({ default: m.JudgeDemoWorkspaceView }))
+);
+
+const WorkspaceLoadingFallback: React.FC<{ label: string }> = ({ label }) => (
+  <div
+    role="status"
+    aria-live="polite"
+    className="flex min-h-[420px] flex-col items-center justify-center p-8 text-center"
+  >
+    <div className="h-10 w-10 animate-spin rounded-full border-3 border-violet-200 border-t-violet-600 mb-4" />
+    <p className="text-sm font-semibold text-slate-700">{label}</p>
+    <p className="mt-1 text-xs text-slate-400">Loading workspace resources...</p>
+  </div>
+);
 
 const MediVoicePlatformShell: React.FC = () => {
   const {
@@ -19,7 +43,7 @@ const MediVoicePlatformShell: React.FC = () => {
   } = usePlatform();
 
   const isPatientExperience = activeWorkspace === 'patient';
-  const isStaffPortalRoute = currentRoute === '/staff/login' || currentRoute === '/login';
+  const isStaffPortalRoute = currentRoute === '/staff/login' || currentRoute === '/login' || currentRoute === '/staff/demo';
 
   return (
     <div
@@ -53,10 +77,68 @@ const MediVoicePlatformShell: React.FC = () => {
       )}
 
       <main className="flex-1">
-        {activeWorkspace === 'patient' && <PatientWebsiteView />}
-        {activeWorkspace === 'doctor' && <DoctorWorkspaceView />}
-        {activeWorkspace === 'lab' && <LaboratoryWorkspaceView />}
-        {activeWorkspace === 'maintenance' && <MaintenanceWorkspaceView />}
+        {activeWorkspace === 'patient' && (
+          <ErrorBoundary
+            boundaryName="Patient Portal"
+            level="workspace"
+            fallbackTitle="Patient Portal Temporarily Unavailable"
+            fallbackMessage="An unexpected issue occurred while rendering the patient portal. Your existing bookings, active search parameters, and records remain secure."
+            onReset={() => void refreshOperationalData()}
+          >
+            <PatientWebsiteView />
+          </ErrorBoundary>
+        )}
+        {activeWorkspace === 'doctor' && (
+          <ErrorBoundary
+            boundaryName="Doctor Clinical Workspace"
+            level="workspace"
+            fallbackTitle="Doctor Clinical Workspace Error"
+            fallbackMessage="An unexpected issue occurred in the doctor portal. Your staff authentication session, patient queues, and appointment schedules remain intact."
+            onReset={() => void refreshOperationalData()}
+          >
+            <React.Suspense fallback={<WorkspaceLoadingFallback label="Loading Doctor Clinical Workspace..." />}>
+              <DoctorWorkspaceView />
+            </React.Suspense>
+          </ErrorBoundary>
+        )}
+        {activeWorkspace === 'lab' && (
+          <ErrorBoundary
+            boundaryName="Laboratory Operations Workspace"
+            level="workspace"
+            fallbackTitle="Laboratory Workspace Error"
+            fallbackMessage="An unexpected issue occurred in the laboratory view. Unsaved 6-digit report verifications can be safely re-entered."
+            onReset={() => void refreshOperationalData()}
+          >
+            <React.Suspense fallback={<WorkspaceLoadingFallback label="Loading Laboratory Operations Workspace..." />}>
+              <LaboratoryWorkspaceView />
+            </React.Suspense>
+          </ErrorBoundary>
+        )}
+        {activeWorkspace === 'maintenance' && (
+          <ErrorBoundary
+            boundaryName="Facility Maintenance Console"
+            level="workspace"
+            fallbackTitle="Facility Maintenance Console Error"
+            fallbackMessage="An unexpected issue occurred in the maintenance view. Active work orders and telemetric logs are preserved."
+            onReset={() => void refreshOperationalData()}
+          >
+            <React.Suspense fallback={<WorkspaceLoadingFallback label="Loading Facility Maintenance Console..." />}>
+              <MaintenanceWorkspaceView />
+            </React.Suspense>
+          </ErrorBoundary>
+        )}
+        {activeWorkspace === 'demo' && (
+          <ErrorBoundary
+            boundaryName="Judge Demonstration Console"
+            level="workspace"
+            fallbackTitle="Evaluation Console Error"
+            fallbackMessage="An unexpected issue occurred in the judge demo evaluation console."
+          >
+            <React.Suspense fallback={<WorkspaceLoadingFallback label="Loading Judge Demonstration Console..." />}>
+              <JudgeDemoWorkspaceView />
+            </React.Suspense>
+          </ErrorBoundary>
+        )}
       </main>
 
       {isPatientExperience && !isStaffPortalRoute && (
@@ -120,9 +202,16 @@ const MediVoicePlatformShell: React.FC = () => {
 
 export function App() {
   return (
-    <PlatformProvider>
-      <MediVoicePlatformShell />
-    </PlatformProvider>
+    <ErrorBoundary
+      boundaryName="Application"
+      level="app"
+      fallbackTitle="Application Recovery"
+      fallbackMessage="An unexpected system error occurred while rendering the application. Hospital operational data, appointment slots, and staff sessions remain intact."
+    >
+      <PlatformProvider>
+        <MediVoicePlatformShell />
+      </PlatformProvider>
+    </ErrorBoundary>
   );
 }
 

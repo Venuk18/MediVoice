@@ -23,6 +23,7 @@ from app.agent.schemas import (
 from app.agent.adapters import (
     ReasoningAdapterError,
     extract_explicit_doctor_name,
+    is_change_doctor_intent,
     deduplicate_doctors,
     is_ambiguous_account_or_booking_inquiry,
     BaseReasoningAdapter,
@@ -40,6 +41,9 @@ from app.agent.adapters import (
     format_slot_display,
     get_specialist_plural,
     format_human_slot_time,
+    format_conversational_slots,
+    format_alternative_doctor_offer,
+    format_no_department_slots_message,
     sanitize_patient_facing_text,
     is_cancellation,
     is_explicit_cancellation,
@@ -59,7 +63,11 @@ from app.agent.adapters import (
     with_urgent_guidance_if_needed,
 )
 from app.agent.tool_router import RestrictedToolRouter
-from app.services.doctor_service import search_doctors_tool
+from app.services.doctor_service import (
+    search_doctors_tool,
+    get_available_slots_tool,
+    find_alternative_doctors_with_slots,
+)
 
 
 class ConversationManager:
@@ -140,15 +148,18 @@ class ConversationManager:
         if not doc_query:
             return
 
+        from app.agent.adapters import matches_doctor_name
+
         # If already selected this exact doctor, keep current state
-        if session.draft.doctor_id and session.draft.doctor_name and doc_query.lower() in session.draft.doctor_name.lower():
+        if session.draft.doctor_id and session.draft.doctor_name and matches_doctor_name(doc_query, session.draft.doctor_name):
             return
 
         # Check if doctor was already found in previous search_doctors tool_trace
         for tr in reversed(session.tool_trace):
             if tr.tool_name == "search_doctors" and tr.success and isinstance(tr.data, list):
                 for d in deduplicate_doctors(tr.data):
-                    if doc_query.lower() in str(d.get("display_name", "")).lower():
+                    disp = str(d.get("display_name", ""))
+                    if matches_doctor_name(doc_query, disp):
                         if session.draft.doctor_id != d["doctor_id"]:
                             session.draft.doctor_id = d["doctor_id"]
                             session.draft.doctor_name = d["display_name"]
@@ -156,6 +167,21 @@ class ConversationManager:
                             session.draft.slot_id = None
                             session.draft.slot_start_time = None
                         return
+
+        # Direct database search fallback if doctor is uniquely identifiable
+        try:
+            from app.services.doctor_service import search_doctors
+            matched_docs = search_doctors(db, query=doc_query)
+            if matched_docs and len(matched_docs) == 1:
+                d = matched_docs[0]
+                if session.draft.doctor_id != d["doctor_id"]:
+                    session.draft.doctor_id = d["doctor_id"]
+                    session.draft.doctor_name = d["display_name"]
+                    session.draft.specialty = d["specialty"]
+                    session.draft.slot_id = None
+                    session.draft.slot_start_time = None
+        except Exception:
+            pass
 
     def _hydrate_slot_from_trace(self, session: AgentSessionState) -> None:
         """Populates slot_start_time if slot_id matches a slot returned in tool_trace."""
@@ -201,7 +227,63 @@ class ConversationManager:
         session.history.append(user_msg_record)
 
         normalized_confirmation_ack = re.sub(r"[.!?,;]+", "", message.strip().lower())
+        # Foreign Indic script safeguard (Gujarati, Malayalam, Bengali, etc. from noisy STT)
+        from app.agent.language_resolver import detect_unsupported_foreign_script
+        foreign_script_in_msg = detect_unsupported_foreign_script(message)
+        if foreign_script_in_msg:
+            if session.confirmation_status == ConfirmationStatus.PENDING or session.step == ConversationStep.AWAITING_CONFIRMATION:
+                clarification_by_language = {
+                    "en": "I'm sorry, I couldn't hear that clearly. Would you like me to book this appointment? Please say yes to confirm, or tell me what you would like to change.",
+                    "te": "క్షమించండి, మీ మాట స్పష్టంగా వినిపించలేదు. ఈ అపాయింట్‌మెంట్‌ను బుక్ చేయమంటారా? నిర్ధారించడానికి ‘అవును’ అని చెప్పండి, లేదా మార్చాల్సిన వివరాలను చెప్పండి.",
+                    "hi": "क्षमा करें, आपकी बात स्पष्ट सुनाई नहीं दी। क्या मैं यह अपॉइंटमेंट बुक करूँ? पुष्टि के लिए ‘हाँ’ कहें, या बताएं कि क्या बदलना है।",
+                    "ta": "மன்னிக்கவும், உங்கள் குரல் தெளிவாக கேட்கவில்லை. இந்த அப்பாயிண்ட்மென்ட்டை பதிவு செய்யவா? உறுதிப்படுத்த ‘ஆம்’ என்று சொல்லுங்கள் அல்லது மாற்ற வேண்டியதைச் சொல்லுங்கள்.",
+                    "kn": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ಮಾತು ಸ್ಪಷ್ಟವಾಗಿ ಕೇಳಿಸಲಿಲ್ಲ. ಈ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ಬುಕ್ ಮಾಡಲೇ? ಖಚಿತಪಡಿಸಲು ‘ಹೌದು’ ಎಂದು ಹೇಳಿ ಅಥವಾ ಬದಲಿಸಬೇಕಾದುದನ್ನು ತಿಳಿಸಿ.",
+                }
+                reply = clarification_by_language.get(lang, clarification_by_language["en"])
+                session.history.append(ChatMessage(role="assistant", content=reply))
+                return self._build_response(session, sanitize_patient_facing_text(reply, lang))
+            elif session.step in (ConversationStep.COLLECTING_NAME, ConversationStep.COLLECTING_PHONE):
+                reg_clarification = {
+                    "en": "I'm sorry, I couldn't hear that clearly. Please state your name or 10-digit phone number clearly.",
+                    "te": "క్షమించండి, మీ వివరాలు స్పష్టంగా వినిపించలేదు. దయచేసి మీ పేరు లేదా 10 అంకెల ఫోన్ నంబర్‌ను మళ్ళీ స్పష్టంగా చెప్పండి.",
+                    "hi": "क्षमा करें, आपका विवरण स्पष्ट नहीं था। कृपया अपना नाम या 10 अंकों का फोन नंबर स्पष्ट रूप से बताएं।",
+                    "ta": "மன்னிக்கவும், உங்கள் விவரங்கள் தெளிவாக இல்லை. உங்கள் பெயர் அல்லது தொலைபேசி எண்ணை மீண்டும் தெளிவாகக் கூறவும்.",
+                    "kn": "ಕ್ಷಮಿಸಿ, ನಿಮ್ಮ ವಿವರಗಳು ಸ್ಪಷ್ಟವಾಗಿಲ್ಲ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಹೆಸರು ಅಥವಾ 10 ಅಂಕಿಗಳ ಫೋನ್ ಸಂಖ್ಯೆಯನ್ನು ಸ್ಪಷ್ಟವಾಗಿ ತಿಳಿಸಿ.",
+                }
+                reply = reg_clarification.get(lang, reg_clarification["en"])
+                session.history.append(ChatMessage(role="assistant", content=reply))
+                return self._build_response(session, sanitize_patient_facing_text(reply, lang))
+            else:
+                gen_clarification = {
+                    "en": "I'm sorry, I couldn't understand that clearly. Could you please repeat your request?",
+                    "te": "క్షమించండి, మీ మాట స్పష్టంగా అర్థం కాలేదు. దయచేసి మీ అభ్యర్థనను మళ్ళీ చెప్పగలరా?",
+                    "hi": "क्षमा करें, मैं समझ नहीं पाया। क्या आप कृपया दोबारा बता सकते हैं?",
+                    "ta": "மன்னிக்கவும், தெளிவாகப் புரியவில்லை. தயவுசெய்து மீண்டும் கூற முடியுமா?",
+                    "kn": "ಕ್ಷಮಿಸಿ, ಅರ್ಥವಾಗಲಿಲ್ಲ. ದಯವಿಟ್ಟು ಮತ್ತೊಮ್ಮೆ ಹೇಳುವಿರಾ?",
+                }
+                reply = gen_clarification.get(lang, gen_clarification["en"])
+                session.history.append(ChatMessage(role="assistant", content=reply))
+                return self._build_response(session, sanitize_patient_facing_text(reply, lang))
+
         ambiguous_confirmation_acks = {"ok", "okay", "sure", "alright", "సరే", "అలాగే", "சரி", "ಸರಿ", "ठीक है"}
+        rejection_confirmation_acks = {
+            "వద్దు", "vaddu", "no", "nahi", "బుక్ చేయకండి", "చేయకండి", "చేయవద్దు",
+            "వద్దు బుక్", "బుక్ చేయొద్దు", "beda", "vendaam", "dont book", "don't book",
+            "రద్దు చేయండి", "రద్దు"
+        }
+        if session.confirmation_status == ConfirmationStatus.PENDING and (
+            normalized_confirmation_ack in rejection_confirmation_acks
+            or any(t in message for t in ("బుక్ చేయకండి", "చేయకండి", "చేయవద్దు", "వద్దు బుక్", "బుక్ చేయొద్దు", "రద్దు చేయండి"))
+        ) and not is_affirmative(message):
+            session.confirmation_status = ConfirmationStatus.REJECTED
+            session.step = ConversationStep.CANCELLED
+            session.workflow_stage = "cancelled"
+            session.pending_action = None
+            session.pending_action_data = {}
+            reply = format_localized_message(lang, "cancelled")
+            session.history.append(ChatMessage(role="assistant", content=reply))
+            return self._build_response(session, reply)
+
         if session.confirmation_status == ConfirmationStatus.PENDING and normalized_confirmation_ack in ambiguous_confirmation_acks:
             clarification_by_language = {
                 "en": "Would you like me to book this appointment? Please say yes to confirm, or tell me what you would like to change.",
@@ -218,6 +300,200 @@ class ConversationManager:
             reply = "క్యాబ్ గురించి కొంచెం వివరంగా చెబుతారా? మీరు రవాణా గురించి అడుగుతున్నారా, లేక అపాయింట్‌మెంట్ బుకింగ్‌ను కొనసాగించాలా?"
             session.history.append(ChatMessage(role="assistant", content=reply))
             return self._build_response(session, reply)
+
+        # Handle pending alternative doctor offer
+        if session.pending_action == "CONFIRM_ALTERNATIVE_DOCTOR":
+            is_accept = (
+                is_affirmative(message)
+                or normalized_confirmation_ack in ambiguous_confirmation_acks
+                or bool(re.search(r"\b(?:book\s+with\s+(?:her|him)|book\s+with\s+dr|book\s+it|confirm|yes|fine|okay|sure|please\s+book)\b", message.lower()))
+                or any(t in message for t in ("సరే", "అలాగే", "హా", "బుక్ చేయండి", "ఖరారు", "చెప్పండి"))
+            )
+            is_reject = (
+                normalized_confirmation_ack in rejection_confirmation_acks
+                or any(t in message for t in ("వద్దు", "వేరే", "no", "nahi", "beda", "vendaam"))
+                or "only want" in message.lower()
+            ) and not is_accept
+
+            if is_accept:
+                alt_doc_id = session.pending_action_data.get("doctor_id")
+                alt_doc_name = session.pending_action_data.get("doctor_name")
+                alt_spec = session.pending_action_data.get("specialty")
+                alt_slot_id = session.pending_action_data.get("slot_id")
+                alt_slot_start = session.pending_action_data.get("slot_start_time")
+
+                if alt_doc_id:
+                    session.draft.doctor_id = alt_doc_id
+                    session.draft.doctor_name = alt_doc_name
+                if alt_spec:
+                    session.draft.specialty = alt_spec
+                if alt_slot_id:
+                    session.draft.slot_id = alt_slot_id
+                    session.draft.slot_start_time = alt_slot_start
+
+                session.pending_action = None
+                session.pending_action_data = {}
+
+                if session.draft.is_complete():
+                    session.step = ConversationStep.AWAITING_CONFIRMATION
+                    session.confirmation_status = ConfirmationStatus.PENDING
+                    session.confirmed_draft_fingerprint = session.draft.get_fingerprint()
+                    pat_disp = (
+                        f"{session.draft.patient_name} ({session.draft.patient_reference})"
+                        if session.draft.patient_name and session.draft.patient_name != session.draft.patient_reference
+                        else session.draft.patient_reference
+                    )
+                    reply = format_localized_message(
+                        lang,
+                        "confirm_summary",
+                        patient_reference=pat_disp,
+                        doctor_name=session.draft.doctor_name or "Specialist",
+                        specialty=session.draft.specialty or "OPD",
+                        slot_display=format_slot_display(session.draft.slot_id, session.draft.slot_start_time, lang=lang),
+                        reason_category=session.draft.reason_category,
+                    )
+                    session.history.append(ChatMessage(role="assistant", content=reply))
+                    return self._build_response(session, reply)
+                elif not session.draft.patient_reference:
+                    session.step = ConversationStep.COLLECTING_DETAILS
+                    session.pending_action = "AWAITING_PATIENT_STATUS"
+                    reply = format_localized_message(lang, "ask_visited_before")
+                    session.history.append(ChatMessage(role="assistant", content=reply))
+                    return self._build_response(session, reply)
+                else:
+                    session.step = ConversationStep.COLLECTING_DETAILS
+                    reply = build_localized_prompt_for_current_state(session)
+                    session.history.append(ChatMessage(role="assistant", content=reply))
+                    return self._build_response(session, reply)
+            elif is_reject:
+                session.pending_action = None
+                session.pending_action_data = {}
+                doc_lbl = session.draft.doctor_name or "the doctor"
+                if lang == "te":
+                    reply = f"సరేనండి. {doc_lbl} గారి ఎంపికను అలాగే ఉంచుతాము. భవిష్యత్ తేదీలు లేదా వెయిట్‌లిస్ట్ గురించి తెలుసుకోవాలనుకుంటే తెలియజేయండి."
+                elif lang == "hi":
+                    reply = f"ठीक है, मैं {doc_lbl} का चयन बनाए रखूंगा। यदि आप भविष्य की तारीखें देखना चाहते हैं तो कृपया बताएं।"
+                elif lang == "ta":
+                    reply = f"சரி, நான் {doc_lbl} அவர்களையே வைத்திருக்கிறேன். எதிர்கால தேதிகளைப் பார்க்க விரும்புகிறீர்களா?"
+                elif lang == "kn":
+                    reply = f"ಸರಿ, ನಾನು {doc_lbl} ಅವರ ಆಯ್ಕೆಯನ್ನು ಹಾಗೆಯೇ ಇರಿಸುತ್ತೇನೆ. ಮುಂದಿನ ದಿನಾಂಕಗಳನ್ನು ಪರಿಶೀಲಿಸಲು ಬಯಸುವಿರಾ?"
+                else:
+                    reply = f"Understood. I will keep {doc_lbl} selected. Please let me know if you would like to join our priority waitlist or check further dates."
+                session.history.append(ChatMessage(role="assistant", content=reply))
+                return self._build_response(session, reply)
+
+        # Handle identity conflict clarification (e.g. phone already registered under another name)
+        if session.pending_action == "CLARIFY_PATIENT_IDENTITY_CONFLICT":
+            prov_name = session.pending_action_data.get("provided_name") or session.draft.patient_name
+            exist_name = session.pending_action_data.get("existing_name") or "Existing Patient"
+            pat_ref = session.pending_action_data.get("patient_reference") or session.draft.patient_reference
+            clean_msg = message.strip().lower()
+
+            wants_existing = exist_name.lower() in clean_msg
+            wants_provided = (
+                (prov_name and prov_name.lower() in clean_msg)
+                or any(t in clean_msg for t in ("continue", "mine", "me", "new", "నా పేరు", "నేను", "నాతో", "నన్ను", "yes", "proceed"))
+            )
+
+            if wants_existing and not wants_provided:
+                session.draft.patient_name = exist_name
+            else:
+                session.draft.patient_name = prov_name
+
+            session.draft.patient_reference = pat_ref
+            session.pending_action = None
+            session.pending_action_data = {}
+
+            if not session.draft.reason_category:
+                session.draft.reason_category = f"{session.draft.specialty or 'General'} Consultation"
+
+            if session.draft.is_complete():
+                session.step = ConversationStep.AWAITING_CONFIRMATION
+                session.confirmation_status = ConfirmationStatus.PENDING
+                session.confirmed_draft_fingerprint = session.draft.get_fingerprint()
+                pat_disp = f"{session.draft.patient_name} ({session.draft.patient_reference})"
+                reply = format_localized_message(
+                    lang,
+                    "confirm_summary",
+                    patient_reference=pat_disp,
+                    doctor_name=session.draft.doctor_name or "Specialist",
+                    specialty=session.draft.specialty or "OPD",
+                    slot_display=format_slot_display(session.draft.slot_id, session.draft.slot_start_time, lang=lang),
+                    reason_category=session.draft.reason_category,
+                )
+            else:
+                reply = f"Thank you, {session.draft.patient_name}! Your details have been updated."
+            session.history.append(ChatMessage(role="assistant", content=reply))
+            return self._build_response(session, reply)
+
+        # Handle pending earliest suggested slot confirmation
+        if session.pending_action in ("CONFIRM_SUGGESTED_SLOT", "SELECT_EARLIEST_SLOT"):
+            is_accept = (
+                is_affirmative(message)
+                or normalized_confirmation_ack in ambiguous_confirmation_acks
+                or bool(re.search(r"\b(?:book\s+it|confirm|reserve|yes|fine|okay|sure|please\s+book)\b", message.lower()))
+                or any(t in message for t in ("సరే", "అలాగే", "హా", "ఖరారు", "బుక్ చేయండి", "రిజర్వ్ చేయండి"))
+            )
+            is_reject = (
+                normalized_confirmation_ack in rejection_confirmation_acks
+                or any(t in message for t in ("వద్దు", "వేరే సమయం", "మరో సమయం", "other time", "different time", "no"))
+            ) and not is_accept
+
+            if is_accept:
+                s_id = session.pending_action_data.get("slot_id")
+                s_start = session.pending_action_data.get("slot_start_time")
+                if s_id:
+                    session.draft.slot_id = s_id
+                    session.draft.slot_start_time = s_start
+                session.pending_action = None
+                session.pending_action_data = {}
+
+                if session.draft.is_complete():
+                    session.step = ConversationStep.AWAITING_CONFIRMATION
+                    session.confirmation_status = ConfirmationStatus.PENDING
+                    session.confirmed_draft_fingerprint = session.draft.get_fingerprint()
+                    pat_disp = (
+                        f"{session.draft.patient_name} ({session.draft.patient_reference})"
+                        if session.draft.patient_name and session.draft.patient_name != session.draft.patient_reference
+                        else session.draft.patient_reference
+                    )
+                    reply = format_localized_message(
+                        lang,
+                        "confirm_summary",
+                        patient_reference=pat_disp,
+                        doctor_name=session.draft.doctor_name or "Specialist",
+                        specialty=session.draft.specialty or "OPD",
+                        slot_display=format_slot_display(session.draft.slot_id, session.draft.slot_start_time, lang=lang),
+                        reason_category=session.draft.reason_category,
+                    )
+                    session.history.append(ChatMessage(role="assistant", content=reply))
+                    return self._build_response(session, reply)
+                elif not session.draft.patient_reference:
+                    session.step = ConversationStep.COLLECTING_DETAILS
+                    session.pending_action = "AWAITING_PATIENT_STATUS"
+                    reply = format_localized_message(lang, "ask_visited_before")
+                    session.history.append(ChatMessage(role="assistant", content=reply))
+                    return self._build_response(session, reply)
+                else:
+                    session.step = ConversationStep.COLLECTING_DETAILS
+                    reply = build_localized_prompt_for_current_state(session)
+                    session.history.append(ChatMessage(role="assistant", content=reply))
+                    return self._build_response(session, reply)
+            elif is_reject:
+                session.pending_action = None
+                session.pending_action_data = {}
+                if lang == "te":
+                    reply = f"సరేనండి. {session.draft.doctor_name or 'వైద్యుల'} వారికి మీకు అనుకూలమైన సమయం లేదా తేదీని తెలియజేయండి."
+                elif lang == "hi":
+                    reply = f"ठीक है। कृपया {session.draft.doctor_name or 'डॉक्टर'} के लिए अपना पसंदीदा समय या तारीख बताएं।"
+                elif lang == "ta":
+                    reply = f"சரி. {session.draft.doctor_name or 'மருத்துவர்'} அவர்களுக்கு உங்களுக்கு வசதியான நேரத்தைத் தெரிவிக்கவும்."
+                elif lang == "kn":
+                    reply = f"ಸರಿ. {session.draft.doctor_name or 'ವೈದ್ಯರು'} ಅವರಿಗೆ ನಿಮಗೆ ಅನುಕೂಲಕರವಾದ ಸಮಯವನ್ನು ತಿಳಿಸಿ."
+                else:
+                    reply = f"Understood. Which date or time would you prefer for {session.draft.doctor_name or 'the doctor'}?"
+                session.history.append(ChatMessage(role="assistant", content=reply))
+                return self._build_response(session, reply)
 
         # Snapshot initial state before reasoning
         initial_fingerprint = session.draft.get_fingerprint()
@@ -270,6 +546,38 @@ class ConversationManager:
         )
 
         if not emergency_kind and not is_collecting_patient_info:
+            if is_change_doctor_intent(message):
+                session.draft.doctor_id = None
+                session.draft.doctor_name = None
+                session.draft.slot_id = None
+                session.draft.slot_start_time = None
+                session.confirmation_status = ConfirmationStatus.NONE
+                session.confirmed_draft_fingerprint = None
+                session.step = ConversationStep.COLLECTING_DOCTOR
+                session.pending_action = None
+                session.pending_action_data = {}
+                spec = session.draft.specialty
+                if spec:
+                    matched_docs = deduplicate_doctors(search_doctors_tool(db, specialty_or_department=spec))
+                    if matched_docs:
+                        doc_lines = "\n".join(
+                            [f"• {d['display_name']} — {d.get('specialty', spec)}" for d in matched_docs[:5]]
+                        )
+                        reply = (
+                            f"సరే, డాక్టర్‌ని మారుద్దాం. మా వద్ద ఉన్న ఇతర వైద్యులు:\n{doc_lines}\n\nమీరు ఎవరితో అపాయింట్‌మెంట్ తీసుకోవాలనుకుంటున్నారు?"
+                            if lang == "te"
+                            else f"Sure, let's select a different doctor. Available specialists:\n{doc_lines}\n\nWhich doctor would you prefer?"
+                        )
+                        session.history.append(ChatMessage(role="assistant", content=reply))
+                        return self._build_response(session, reply)
+                reply = (
+                    "సరే, వేరే వైద్యుడిని ఎంచుకుందాం. మీకు ఏ విభాగం లేదా ఏ డాక్టర్ గారితో సంప్రదింపులు కావాలి?"
+                    if lang == "te"
+                    else "Sure, let's select a different doctor. Which specialty or doctor would you like to consult?"
+                )
+                session.history.append(ChatMessage(role="assistant", content=reply))
+                return self._build_response(session, reply)
+
             explicit_doc_name = extract_explicit_doctor_name(message)
             if explicit_doc_name:
                 matched_docs = deduplicate_doctors(search_doctors_tool(db, specialty_or_department=explicit_doc_name))
@@ -302,6 +610,77 @@ class ConversationManager:
         # Pre-populate doctor from prior search trace if user selected one by name or ordinal (skip during emergency priority)
         if not emergency_kind:
             self._hydrate_doctor_from_trace_or_db(db, session, message)
+
+        if (
+            not emergency_kind
+            and not is_collecting_patient_info
+            and session.draft.doctor_id
+            and not session.draft.slot_id
+            and is_flexible_slot_request(message)
+        ):
+            slot_intent = ToolCallIntent(
+                tool_name="get_available_slots",
+                arguments={"doctor_id": session.draft.doctor_id},
+            )
+            slot_res = self.tool_router.execute_tool(db, slot_intent)
+            session.tool_trace.append(slot_res)
+            turn_tool_calls.append(slot_res)
+            if slot_res.success and slot_res.data:
+                slots = slot_res.data
+                s0 = slots[0]
+                session.pending_action = "CONFIRM_SUGGESTED_SLOT"
+                session.pending_action_data = {
+                    "slot_id": s0["slot_id"],
+                    "slot_start_time": s0.get("start_time"),
+                }
+                formatted_time = format_human_slot_time(s0.get("start_time"), lang=lang)
+                doc_name = session.draft.doctor_name or "the doctor"
+                if lang == "te":
+                    reply = f"{doc_name} గారితో అత్యంత త్వరగా లభించే అపాయింట్‌మెంట్ సమయం {formatted_time}.\n\nఈ సమయాన్ని మీ కోసం రిజర్వ్ చేసి బుక్ చేయమంటారా?"
+                elif lang == "hi":
+                    reply = f"{doc_name} के साथ सबसे पहला उपलब्ध अपॉइंटमेंट समय {formatted_time} है। क्या आप चाहते हैं कि मैं आपके लिए यह स्लॉट बुक करूँ?"
+                elif lang == "ta":
+                    reply = f"{doc_name} அவர்களிடம் முதல் கிடைக்கும் நேரம் {formatted_time}. இதை உங்களுக்காக பதிவு செய்யவா?"
+                elif lang == "kn":
+                    reply = f"{doc_name} ಅವರೊಂದಿಗೆ ಮೊದಲ ಲಭ್ಯವಿರುವ ಸಮಯ {formatted_time}. ಈ ಸಮಯವನ್ನು ನಿಮಗಾಗಿ ಬುಕ್ ಮಾಡಲೇ?"
+                else:
+                    reply = f"The earliest available appointment with {doc_name} is {formatted_time}. Would you like me to reserve that slot for you?"
+                session.step = ConversationStep.COLLECTING_SLOT
+                session.history.append(ChatMessage(role="assistant", content=reply))
+                return self._build_response(session, reply, turn_tool_calls=turn_tool_calls)
+            else:
+                alts = find_alternative_doctors_with_slots(db, doctor_id=session.draft.doctor_id, days=20)
+                if alts:
+                    best_alt = alts[0]
+                    earliest_slot = best_alt["earliest_slot"]
+                    alt_time = format_human_slot_time(earliest_slot["start_time"], lang=lang)
+                    reply = format_alternative_doctor_offer(
+                        doctor_name=session.draft.doctor_name or "The selected doctor",
+                        alt_doctor_name=best_alt["display_name"],
+                        alt_slot_time=alt_time,
+                        lang=lang,
+                    )
+                    session.pending_action = "CONFIRM_ALTERNATIVE_DOCTOR"
+                    session.pending_action_data = {
+                        "doctor_id": best_alt["doctor_id"],
+                        "doctor_name": best_alt["display_name"],
+                        "specialty": best_alt.get("specialty"),
+                        "slot_id": earliest_slot["slot_id"],
+                        "slot_start_time": earliest_slot["start_time"],
+                    }
+                    session.step = ConversationStep.COLLECTING_DOCTOR
+                    session.history.append(ChatMessage(role="assistant", content=reply))
+                    return self._build_response(session, reply, turn_tool_calls=turn_tool_calls)
+                else:
+                    dept_name = session.draft.specialty or "this department"
+                    reply = format_no_department_slots_message(
+                        department_name=dept_name,
+                        doctor_name=session.draft.doctor_name or "the selected doctor",
+                        lang=lang,
+                    )
+                    session.step = ConversationStep.COLLECTING_DOCTOR
+                    session.history.append(ChatMessage(role="assistant", content=reply))
+                    return self._build_response(session, reply, turn_tool_calls=turn_tool_calls)
 
         booking_attempted_in_turn = False
         booking_gate_blocked_reason: Optional[str] = None
@@ -715,13 +1094,36 @@ class ConversationManager:
                                 slot_lines=slot_lines,
                                 example_slot=slots[0]["slot_id"],
                             )
+                            session.step = ConversationStep.COLLECTING_SLOT
                         else:
-                            final_reply = format_localized_message(
-                                lang,
-                                "no_slots",
-                                doctor_name=chosen_doc["display_name"],
-                            )
-                        session.step = ConversationStep.COLLECTING_SLOT
+                            alts = find_alternative_doctors_with_slots(db, doctor_id=chosen_doc["doctor_id"], days=20)
+                            if alts:
+                                best_alt = alts[0]
+                                earliest_slot = best_alt["earliest_slot"]
+                                alt_time = format_human_slot_time(earliest_slot["start_time"], lang=lang)
+                                final_reply = format_alternative_doctor_offer(
+                                    doctor_name=chosen_doc["display_name"],
+                                    alt_doctor_name=best_alt["display_name"],
+                                    alt_slot_time=alt_time,
+                                    lang=lang,
+                                )
+                                session.pending_action = "CONFIRM_ALTERNATIVE_DOCTOR"
+                                session.pending_action_data = {
+                                    "doctor_id": best_alt["doctor_id"],
+                                    "doctor_name": best_alt["display_name"],
+                                    "specialty": best_alt.get("specialty"),
+                                    "slot_id": earliest_slot["slot_id"],
+                                    "slot_start_time": earliest_slot["start_time"],
+                                }
+                                session.step = ConversationStep.COLLECTING_DOCTOR
+                            else:
+                                dept_name = chosen_doc.get("specialty") or "this department"
+                                final_reply = format_no_department_slots_message(
+                                    department_name=dept_name,
+                                    doctor_name=chosen_doc["display_name"],
+                                    lang=lang,
+                                )
+                                session.step = ConversationStep.COLLECTING_DOCTOR
                     else:
                         if not session.draft.specialty and docs:
                             session.draft.specialty = docs[0].get("specialty")
@@ -769,6 +1171,8 @@ class ConversationManager:
                         elif len(docs) == 1:
                             chosen = docs[0]
                             session.draft.specialty = chosen.get("specialty")
+                            if not session.draft.doctor_name:
+                                session.draft.doctor_name = chosen.get("display_name")
                             session.pending_action = "SHOW_SLOTS_FOR_DOCTOR"
                             session.pending_action_data = {
                                 "doctor_id": chosen.get("doctor_id"),
@@ -860,11 +1264,35 @@ class ConversationManager:
                         )
                     session.step = ConversationStep.COLLECTING_SLOT
                 else:
-                    final_reply = format_localized_message(
-                        lang,
-                        "no_slots",
-                        doctor_name=session.draft.doctor_name or "the selected doctor",
-                    )
+                    target_doc_id = str(action.tool_call.arguments.get("doctor_id") or session.draft.doctor_id or "")
+                    alts = find_alternative_doctors_with_slots(db, doctor_id=target_doc_id, days=20)
+                    if alts:
+                        best_alt = alts[0]
+                        earliest_slot = best_alt["earliest_slot"]
+                        alt_time = format_human_slot_time(earliest_slot["start_time"], lang=lang)
+                        final_reply = format_alternative_doctor_offer(
+                            doctor_name=session.draft.doctor_name or "The selected doctor",
+                            alt_doctor_name=best_alt["display_name"],
+                            alt_slot_time=alt_time,
+                            lang=lang,
+                        )
+                        session.pending_action = "CONFIRM_ALTERNATIVE_DOCTOR"
+                        session.pending_action_data = {
+                            "doctor_id": best_alt["doctor_id"],
+                            "doctor_name": best_alt["display_name"],
+                            "specialty": best_alt.get("specialty"),
+                            "slot_id": earliest_slot["slot_id"],
+                            "slot_start_time": earliest_slot["start_time"],
+                        }
+                        session.step = ConversationStep.COLLECTING_DOCTOR
+                    else:
+                        dept_name = session.draft.specialty or "this department"
+                        final_reply = format_no_department_slots_message(
+                            department_name=dept_name,
+                            doctor_name=session.draft.doctor_name or "the selected doctor",
+                            lang=lang,
+                        )
+                        session.step = ConversationStep.COLLECTING_DOCTOR
 
             elif tool_name == "register_patient":
                 tool_res = self.tool_router.execute_tool(db, action.tool_call)
@@ -872,14 +1300,56 @@ class ConversationManager:
                 turn_tool_calls.append(tool_res)
                 if tool_res.success and tool_res.data:
                     p_data = tool_res.data
-                    session.draft.patient_reference = p_data.get("patient_reference")
-                    session.draft.patient_name = p_data.get("full_name")
-                    session.draft.patient_phone = p_data.get("phone_number")
-                    session.pending_action = None
-                    session.pending_action_data = {}
-                    if not session.draft.reason_category:
-                        session.draft.reason_category = f"{session.draft.specialty or 'General'} Consultation"
-                    final_reply = f"Thank you, {session.draft.patient_name}! Your patient registration is complete. Your reference ID is {session.draft.patient_reference}."
+                    if p_data.get("identity_conflict"):
+                        provided_name = p_data.get("provided_name") or session.draft.patient_name
+                        existing_name = p_data.get("full_name")
+                        phone = p_data.get("phone_number")
+                        session.draft.patient_name = provided_name
+                        session.draft.patient_reference = p_data.get("patient_reference")
+                        session.draft.patient_phone = phone
+                        session.pending_action = "CLARIFY_PATIENT_IDENTITY_CONFLICT"
+                        session.pending_action_data = {
+                            "provided_name": provided_name,
+                            "existing_name": existing_name,
+                            "phone": phone,
+                            "patient_reference": p_data.get("patient_reference"),
+                        }
+                        if lang == "te":
+                            final_reply = (
+                                f"ఈ మొబైల్ నంబర్ ({phone}) ఇప్పటికే మా రికార్డులలో '{existing_name}' పేరుతో ఉంది. "
+                                f"మీరు '{existing_name}' కోసం బుక్ చేస్తున్నారా లేదా '{provided_name}' పేరుతో కొనసాగించాలా?"
+                            )
+                        elif lang == "hi":
+                            final_reply = (
+                                f"यह फोन नंबर ({phone}) पहले से हमारे रिकॉर्ड में '{existing_name}' के नाम पर है। "
+                                f"क्या आप '{existing_name}' के लिए बुक कर रहे हैं या '{provided_name}' के नाम से जारी रखना चाहते हैं?"
+                            )
+                        elif lang == "ta":
+                            final_reply = (
+                                f"இந்த தொலைபேசி எண் ({phone}) ஏற்கனவே '{existing_name}' என்ற பெயரில் உள்ளது. "
+                                f"நீங்கள் '{existing_name}'க்காக பதிவு செய்கிறீர்களா அல்லது '{provided_name}' பெயரில் தொடர விரும்புகிறீர்களா?"
+                            )
+                        elif lang == "kn":
+                            final_reply = (
+                                f"ಈ ಫೋನ್ ಸಂಖ್ಯೆ ({phone}) ಈಗಾಗಲೇ '{existing_name}' ಹೆಸರಿನಲ್ಲಿದೆ. "
+                                f"ನೀವು '{existing_name}' ಅವರಿಗೆ ಬುಕ್ ಮಾಡುತ್ತಿದ್ದೀರಾ ಅಥವಾ '{provided_name}' ಹೆಸರಿನೊಂದಿಗೆ ಮುಂದುವರಿಯಬೇಕೆ?"
+                            )
+                        else:
+                            final_reply = (
+                                f"This phone number ({phone}) is currently registered under '{existing_name}'. "
+                                f"Are you booking for '{existing_name}', or would you like to continue as '{provided_name}'?"
+                            )
+                    else:
+                        session.draft.patient_reference = p_data.get("patient_reference")
+                        # Preserve canonical provided patient_name
+                        if not session.draft.patient_name or session.draft.patient_name.lower() in p_data.get("full_name", "").lower():
+                            session.draft.patient_name = p_data.get("full_name")
+                        session.draft.patient_phone = p_data.get("phone_number")
+                        session.pending_action = None
+                        session.pending_action_data = {}
+                        if not session.draft.reason_category:
+                            session.draft.reason_category = f"{session.draft.specialty or 'General'} Consultation"
+                        final_reply = f"Thank you, {session.draft.patient_name}! Your patient registration is complete. Your reference ID is {session.draft.patient_reference}."
 
             elif tool_name == "verify_patient":
                 tool_res = self.tool_router.execute_tool(db, action.tool_call)
@@ -986,17 +1456,17 @@ class ConversationManager:
                 ]
                 is_already_confirm = any(cm.lower() in (final_reply or "").lower() for cm in confirm_markers)
 
-                # If active session language is Indic (te, hi, ta, kn) and final_reply is in English or has duplicate, replace with single localized summary
-                if lang in ("te", "hi", "ta", "kn"):
-                    if not has_expected_language_script(final_reply or "", lang) or not is_already_confirm:
-                        final_reply = summary_prompt
-                    elif "Please verify and confirm" in (final_reply or "") or "confirm your appointment" in (final_reply or "").lower():
-                        final_reply = summary_prompt
-                else:
-                    if not final_reply:
-                        final_reply = summary_prompt
-                    elif not is_already_confirm and summary_prompt not in final_reply:
+                # Part 5: Consolidate booking confirmation into ONE authoritative prompt
+                if "not booked yet" in (final_reply or "").lower() or "ambiguous" in (final_reply or "").lower():
+                    pass
+                elif any(kw in (final_reply or "").lower() for kw in ("note:", "verification", "security notice", "demonstration")):
+                    if summary_prompt not in (final_reply or ""):
                         final_reply = f"{final_reply}\n\n{summary_prompt}"
+                elif any(kw in (final_reply or "").lower() for kw in ("timed out", "temporarily unavailable", "try again shortly")):
+                    if summary_prompt not in (final_reply or ""):
+                        final_reply = f"{final_reply}\n\n{summary_prompt}"
+                else:
+                    final_reply = summary_prompt
 
                 final_reply = with_urgent_guidance_if_needed(
                     lang,

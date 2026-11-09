@@ -5,7 +5,7 @@ import json
 import os
 import time
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from fastapi import Depends, Header, HTTPException, Request, status
 from app.core.config import settings
 
@@ -28,6 +28,7 @@ class StaffRole(str, Enum):
     LAB_OPERATOR = "LAB_OPERATOR"
     MAINTENANCE_STAFF = "MAINTENANCE_STAFF"
     ADMIN = "ADMIN"
+    DEMO_VIEWER = "DEMO_VIEWER"
 
 
 # Secret key for signing synthetic demo tokens
@@ -104,7 +105,8 @@ SYNTHETIC_STAFF_ACCOUNTS: Dict[str, Dict[str, Optional[str]]] = {
 
 def create_staff_token(account: Dict[str, Optional[str]]) -> Tuple[str, int]:
     """Generates an HMAC-SHA256 signed token for a synthetic staff profile."""
-    expires_at = int(time.time()) + _TOKEN_TTL_SECONDS
+    token_ttl = 1800 if account.get("role") == StaffRole.DEMO_VIEWER.value else _TOKEN_TTL_SECONDS
+    expires_at = int(time.time()) + token_ttl
     payload = {
         "staff_id": account["staff_id"],
         "username": account["username"],
@@ -113,6 +115,34 @@ def create_staff_token(account: Dict[str, Optional[str]]) -> Tuple[str, int]:
         "department": account.get("department") or "",
         "doctor_id": account.get("doctor_id"),
         "badge_label": account.get("badge_label") or "",
+        "exp": expires_at,
+    }
+    raw_json = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    b64_payload = base64.urlsafe_b64encode(raw_json).decode("ascii").rstrip("=")
+    signature = hmac.new(
+        _AUTH_SECRET.encode("utf-8"),
+        b64_payload.encode("ascii"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{b64_payload}.{signature}", expires_at
+
+
+def create_patient_token(
+    patient_reference: str,
+    display_name: Optional[str] = None,
+    ttl_seconds: int = _TOKEN_TTL_SECONDS,
+) -> Tuple[str, int]:
+    """Generates an HMAC-SHA256 signed token for a verified patient identity."""
+    expires_at = int(time.time()) + ttl_seconds
+    payload = {
+        "staff_id": None,
+        "username": None,
+        "patient_reference": patient_reference.strip(),
+        "display_name": display_name or "Verified Patient",
+        "role": "PATIENT",
+        "department": None,
+        "doctor_id": None,
+        "badge_label": "Patient",
         "exp": expires_at,
     }
     raw_json = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -174,6 +204,9 @@ def verify_staff_token(token: str) -> Dict[str, Optional[str]]:
 
 def authenticate_staff(username: str, password: str) -> Dict[str, Optional[str]]:
     """Authenticates a synthetic staff account using both username and password."""
+    clean_user = (username or "").strip().lower()
+    if clean_user == "judge.viewer":
+        return authenticate_judge_demo(password)
     if not is_demo_staff_auth_allowed():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -185,7 +218,6 @@ def authenticate_staff(username: str, password: str) -> Dict[str, Optional[str]]
                 ),
             },
         )
-    clean_user = (username or "").strip().lower()
     account = SYNTHETIC_STAFF_ACCOUNTS.get(clean_user)
     if not account:
         raise HTTPException(
@@ -206,28 +238,76 @@ def authenticate_staff(username: str, password: str) -> Dict[str, Optional[str]]
     return account
 
 
+def _verify_judge_password(password: str, encoded_hash: str) -> bool:
+    """Verify a scrypt password hash encoded as scrypt$N$r$p$salt$digest."""
+    try:
+        algorithm, n, r, p, salt_hex, digest_hex = encoded_hash.split("$")
+        if algorithm != "scrypt" or (int(n), int(r), int(p)) != (2**14, 8, 1):
+            return False
+        expected = bytes.fromhex(digest_hex)
+        salt = bytes.fromhex(salt_hex)
+        if len(expected) != 32 or len(salt) < 16:
+            return False
+        actual = hashlib.scrypt(
+            password.encode("utf-8"),
+            salt=salt,
+            n=int(n),
+            r=int(r),
+            p=int(p),
+            dklen=len(expected),
+        )
+        return hmac.compare_digest(actual, expected)
+    except (ValueError, TypeError, MemoryError):
+        return False
+
+
+def authenticate_judge_demo(password: str) -> Dict[str, Optional[str]]:
+    """Authenticate the single opt-in read-only judge account from an env hash."""
+    enabled = os.getenv("ENABLE_JUDGE_DEMO_LOGIN", "").strip().lower() in ("true", "1", "yes")
+    encoded_hash = os.getenv("JUDGE_DEMO_PASSWORD_HASH", "")
+    if not enabled or not encoded_hash:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "JUDGE_DEMO_DISABLED", "message": "Judge demo access is not configured."},
+        )
+    if not password or not _verify_judge_password(password, encoded_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "INVALID_CREDENTIALS", "message": "Invalid staff username or password."},
+        )
+    return {
+        "staff_id": "DEMO-VIEWER-001",
+        "username": "judge.viewer",
+        "display_name": "MediVoice Evaluation Viewer",
+        "role": StaffRole.DEMO_VIEWER.value,
+        "department": "Project Evaluation",
+        "doctor_id": None,
+        "badge_label": "Read-only synthetic demonstration",
+    }
+
+
 def _extract_bearer_token(authorization: Optional[str]) -> Optional[str]:
     if not authorization:
         return None
     clean = authorization.strip()
-    if not clean.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "code": "INVALID_AUTH_HEADER",
-                "message": "Authorization header must use Bearer token format.",
-            },
-        )
-    token = clean[7:].strip()
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={
-                "code": "MISSING_TOKEN",
-                "message": "Bearer token is empty.",
-            },
-        )
-    return token
+    if clean.lower() == "bearer" or clean.lower().startswith("bearer "):
+        token = clean[6:].strip()
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={
+                    "code": "MISSING_TOKEN",
+                    "message": "Bearer token is empty.",
+                },
+            )
+        return token
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={
+            "code": "INVALID_AUTH_HEADER",
+            "message": "Authorization header must use Bearer token format.",
+        },
+    )
 
 
 def require_staff_roles(
@@ -291,3 +371,24 @@ def require_staff_roles(
         return claims
 
     return dependency
+
+
+def get_current_authenticated_identity(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """
+    FastAPI dependency that extracts and validates a Bearer token for any authenticated
+    caller (staff or patient).
+    Raises HTTP 401 if missing, malformed, invalid signature, or expired.
+    """
+    token = _extract_bearer_token(authorization)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "AUTHENTICATION_REQUIRED",
+                "message": "Authentication is required to perform this operation. Please provide a valid Bearer token.",
+            },
+        )
+    return verify_staff_token(token)

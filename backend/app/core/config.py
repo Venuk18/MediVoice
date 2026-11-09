@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     # Voice Orchestration & Streaming Configuration
     VOICE_ENABLED: bool = os.getenv("VOICE_ENABLED", "true").lower() in ("true", "1", "yes")
     VOICE_MAX_DURATION_SECONDS: int = int(os.getenv("VOICE_MAX_DURATION_SECONDS", "60"))
-    VOICE_REQUEST_TIMEOUT_SECONDS: float = float(os.getenv("VOICE_REQUEST_TIMEOUT_SECONDS", "20.0"))
+    VOICE_REQUEST_TIMEOUT_SECONDS: float = float(os.getenv("VOICE_REQUEST_TIMEOUT_SECONDS", "35.0"))
     # Detailed voice timings are opt-in; enable with VOICE_DIAGNOSTICS_ENABLED=true.
     VOICE_DIAGNOSTICS_ENABLED: bool = os.getenv("VOICE_DIAGNOSTICS_ENABLED", "false").lower() in ("true", "1", "yes")
 

@@ -206,8 +206,13 @@ def cancel_appointment(
     cancellation_reason: Optional[str] = None,
     actor_reference: str = "PATIENT_PORTAL",
 ) -> Appointment:
-    """Cancels an appointment and re-releases the slot to AVAILABLE."""
-    appointment = get_appointment_by_id(db, appointment_id)
+    """Cancels an appointment and re-releases the slot to AVAILABLE with concurrency row locking."""
+    is_sqlite = db.bind is not None and db.bind.dialect.name == "sqlite"
+    appt_query = select(Appointment).where(Appointment.id == appointment_id)
+    if not is_sqlite:
+        appt_query = appt_query.with_for_update()
+
+    appointment = db.scalars(appt_query).first()
     if not appointment:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -228,9 +233,13 @@ def cancel_appointment(
 
     try:
         appointment.appointment_status = "CANCELLED"
-        if appointment.slot:
-            # Re-release slot for new bookings
-            appointment.slot.status = "AVAILABLE"
+        if appointment.slot_id:
+            slot_query = select(AppointmentSlot).where(AppointmentSlot.id == appointment.slot_id)
+            if not is_sqlite:
+                slot_query = slot_query.with_for_update()
+            slot = db.scalars(slot_query).first()
+            if slot:
+                slot.status = "AVAILABLE"
 
         audit_details = json.dumps({
             "cancellation_reason": cancellation_reason or "Patient requested",
@@ -247,6 +256,9 @@ def cancel_appointment(
         db.commit()
         db.refresh(appointment)
         return appointment
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as exc:
         db.rollback()
         raise HTTPException(

@@ -43,7 +43,7 @@ export const StaffAuthGate: React.FC<StaffAuthGateProps> = ({
               <p className="font-semibold">This workspace is limited to {requiredRoles.join(' or ')} staff.</p>
               <p className="mt-1">You are signed in as {staffProfile?.display_name} ({staffProfile?.role}).</p>
               <div className="mt-4 flex flex-wrap gap-3">
-                <button type="button" onClick={() => { if (staffProfile?.role === 'DOCTOR') navigate('/doctor'); else if (staffProfile?.role === 'LAB_OPERATOR') navigate('/lab'); else navigate('/maintenance'); }} className="rounded-full bg-amber-800 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-900">Open your workspace</button>
+                <button type="button" onClick={() => { if (staffProfile?.role === 'DEMO_VIEWER') navigate('/staff/demo'); else if (staffProfile?.role === 'DOCTOR') navigate('/doctor'); else if (staffProfile?.role === 'LAB_OPERATOR') navigate('/lab'); else navigate('/maintenance'); }} className="rounded-full bg-amber-800 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-900">Open your workspace</button>
                 <button type="button" onClick={logoutStaff} className="rounded-full border border-amber-300 bg-white px-4 py-2 text-xs font-semibold text-amber-950 hover:bg-amber-100">Sign out</button>
               </div>
             </div>

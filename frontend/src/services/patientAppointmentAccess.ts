@@ -32,3 +32,11 @@ export function forgetPatientAppointmentReference(reference: string): void {
     // Session storage may be unavailable in a restricted browser context.
   }
 }
+
+export function clearPatientAppointmentReferences(): void {
+  try {
+    window.sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Session storage may be unavailable in a restricted browser context.
+  }
+}

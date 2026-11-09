@@ -90,7 +90,7 @@ def staff_login(payload: StaffLoginRequest):
 def get_current_staff_profile(
     claims=Depends(
         require_staff_roles(
-            [StaffRole.DOCTOR, StaffRole.LAB_OPERATOR, StaffRole.MAINTENANCE_STAFF, StaffRole.ADMIN],
+            [StaffRole.DOCTOR, StaffRole.LAB_OPERATOR, StaffRole.MAINTENANCE_STAFF, StaffRole.ADMIN, StaffRole.DEMO_VIEWER],
             strict_unauthenticated=True,
         )
     ),

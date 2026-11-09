@@ -18,11 +18,11 @@ router = APIRouter(prefix="/lab-orders", tags=["Lab Orders"])
 
 _require_lab_operator_role = require_staff_roles(
     [StaffRole.LAB_OPERATOR],
-    strict_unauthenticated=False,
+    strict_unauthenticated=True,
 )
 _require_lab_or_doctor_role = require_staff_roles(
     [StaffRole.LAB_OPERATOR, StaffRole.DOCTOR],
-    strict_unauthenticated=False,
+    strict_unauthenticated=True,
 )
 
 
@@ -154,7 +154,7 @@ def update_status(
     Update lab order workflow stage.
     Protected by LAB_OPERATOR role authorization.
     """
-    actor = (claims.get("display_name") if claims else None) or "LAB_COORDINATOR"
+    actor = claims.get("display_name") or claims.get("username") or "LAB_COORDINATOR"
     order = lab_service.update_lab_order_status(
         db=db,
         order_id=order_id,

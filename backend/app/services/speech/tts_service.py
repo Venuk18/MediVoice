@@ -110,6 +110,37 @@ def clean_text_for_speech(text: str) -> str:
     cleaned = re.sub(r"\b(?:slot|doc)-[A-Za-z0-9_-]+\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bPAT-\d+-[A-Za-z0-9-]+\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bAPT-\d+-[A-Za-z0-9-]+\b", "", cleaned, flags=re.IGNORECASE)
+    # Optimization: Condense long spoken slot/appointment listings (keep top 3 items for voice)
+    # Full list remains visible on screen; speech stays concise, pleasant, and fast.
+    lines = cleaned.splitlines()
+    bullet_indices = [idx for idx, l in enumerate(lines) if l.strip().startswith(("•", "-", "*"))]
+    if len(bullet_indices) >= 4:
+        slot_bullets = [
+            idx for idx in bullet_indices
+            if any(k in lines[idx].lower() for k in ("2026-", "am", "pm", "ఉదయం", "మధ్యాహ్నం", "సాయంత్రం", "slot", "సమయం", "నవంబర్", "november", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "సోమవారం", "మంగళవారం", "బుధవారం", "గురువారం", "శుక్రవారం", "శనివారం", "ఆదివారం"))
+        ]
+        if len(slot_bullets) >= 4:
+            discard_bullets = set(slot_bullets[3:])
+            new_lines = []
+            note_added = False
+            for idx, line in enumerate(lines):
+                if idx in discard_bullets:
+                    if not note_added:
+                        if any("\u0C00" <= c <= "\u0C7F" for c in cleaned):
+                            new_lines.append("మరిన్ని సమయాలు స్క్రీన్‌పై ఉన్నాయి.")
+                        elif any("\u0900" <= c <= "\u097F" for c in cleaned):
+                            new_lines.append("अन्य समय स्क्रीन पर उपलब्ध हैं।")
+                        elif any("\u0B80" <= c <= "\u0BFF" for c in cleaned):
+                            new_lines.append("கூடுதல் நேரங்கள் திரையில் உள்ளன.")
+                        elif any("\u0C80" <= c <= "\u0CFF" for c in cleaned):
+                            new_lines.append("ಹೆಚ್ಚುವರಿ ಸಮಯಗಳು ಪರದೆಯಲ್ಲಿವೆ.")
+                        else:
+                            new_lines.append("More options are displayed on your screen.")
+                        note_added = True
+                    continue
+                new_lines.append(line)
+            cleaned = "\n".join(new_lines)
+
     # Strip asterisks, hashes, backticks, bullet symbols
     cleaned = re.sub(r"[*#`_~•]", " ", cleaned)
     # Collapse consecutive whitespace
@@ -214,7 +245,7 @@ class GnaniTimbreTTS:
         raw_timeout = (
             timeout_seconds
             if timeout_seconds is not None
-            else float(os.getenv("VOICE_REQUEST_TIMEOUT_SECONDS") or settings.VOICE_REQUEST_TIMEOUT_SECONDS or 20.0)
+            else float(os.getenv("VOICE_REQUEST_TIMEOUT_SECONDS") or settings.VOICE_REQUEST_TIMEOUT_SECONDS or 35.0)
         )
         self.timeout_seconds: float = min(max(float(raw_timeout), 1.0), 60.0)
 

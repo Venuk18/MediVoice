@@ -19,9 +19,11 @@ import {
 } from 'lucide-react';
 import { medivoiceApi, ApiError } from '../../services/api';
 import { shouldAutoPlayVoiceReply, shouldResumeVoiceMode } from './turnSpeech';
+import { drawWaveformBars, drawIdleWaveform } from './waveformVisualizer';
 import {
   BookingDraftState,
   SupportedLanguage,
+  VoiceLanguagePreference,
   VoiceToolExecutionResult,
 } from '../../types/api';
 
@@ -39,8 +41,8 @@ export type VoiceState =
 interface MediVoiceVoicePanelProps {
   sessionId: string;
   patientReference?: string | null;
-  selectedLanguage: SupportedLanguage;
-  onLanguageChange: (lang: SupportedLanguage) => void;
+  selectedLanguage: VoiceLanguagePreference;
+  onLanguageChange: (lang: VoiceLanguagePreference) => void;
   onVoiceTurnSuccess: (result: {
     userTranscript: string;
     assistantReply: string;
@@ -59,11 +61,12 @@ interface MediVoiceVoicePanelProps {
 }
 
 const VOICE_LANGUAGES: Array<{
-  code: SupportedLanguage;
+  code: VoiceLanguagePreference;
   locale: string;
   name: string;
   native: string;
 }> = [
+  { code: 'auto', locale: 'auto', name: 'Auto Detect', native: 'Adaptive' },
   { code: 'en', locale: 'en-IN', name: 'English (India)', native: 'English' },
   { code: 'te', locale: 'te-IN', name: 'Telugu', native: 'తెలుగు' },
   { code: 'hi', locale: 'hi-IN', name: 'Hindi', native: 'हिन्दी' },
@@ -175,6 +178,14 @@ function logVoiceDiagnostic(correlationId: string, stage: string, durationMs: nu
   }
 }
 
+function logVoiceEvent(correlationId: string, event: string, details?: Record<string, any>) {
+  try {
+    console.info(`[MediVoice VoiceTurn] [${correlationId}] ${event}`, details || {});
+  } catch {
+    // Diagnostics remain silent on error.
+  }
+}
+
 export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
   sessionId,
   patientReference,
@@ -191,11 +202,15 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [recognizedTranscript, setRecognizedTranscript] = useState<string>('');
   const [assistantResponse, setAssistantResponse] = useState<string>('');
+  const [detectedTurnLang, setDetectedTurnLang] = useState<SupportedLanguage | null>(null);
   const [isPlayingAudio, setIsPlayingAudio] = useState<boolean>(false);
-  const [audioLevel, setAudioLevel] = useState<number>(0.15);
-  const [waveformBars, setWaveformBars] = useState<number[]>([14, 22, 38, 20, 32, 48, 28, 22, 42, 55, 30, 18]);
   const [isLangMenuOpen, setIsLangMenuOpen] = useState<boolean>(false);
   const [isPatientSpeaking, setIsPatientSpeaking] = useState<boolean>(false);
+
+  // Performance-optimized visualizer and ambient glow refs (bypassing React reconciliation)
+  const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const glowRef = useRef<HTMLDivElement | null>(null);
+  const isPatientSpeakingRef = useRef<boolean>(false);
 
   // Audio recording & playback refs
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -233,7 +248,7 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
   const speechEndTimeRef = useRef<number>(0);
   const turnCorrelationIdRef = useRef<string>('');
   const streamingAbortRef = useRef<AbortController | null>(null);
-  const selectedLanguageRef = useRef<SupportedLanguage>(selectedLanguage);
+  const selectedLanguageRef = useRef<VoiceLanguagePreference>(selectedLanguage);
 
   useEffect(() => {
     selectedLanguageRef.current = selectedLanguage;
@@ -266,6 +281,15 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
     if (animFrameRef.current) {
       cancelAnimationFrame(animFrameRef.current);
       animFrameRef.current = null;
+    }
+    if (waveformCanvasRef.current) {
+      const ctx = waveformCanvasRef.current.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(0, 0, waveformCanvasRef.current.width, waveformCanvasRef.current.height);
+      }
+    }
+    if (glowRef.current) {
+      glowRef.current.style.transform = 'scale(1)';
     }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
@@ -302,6 +326,7 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
       audioElementRef.current = null;
     }
     setIsPlayingAudio(false);
+    isPatientSpeakingRef.current = false;
     setIsPatientSpeaking(false);
   }, [clearWaitingTimer]);
 
@@ -397,7 +422,7 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
       // Guard 1: Silence / No speech detected during turn (avoid useless backend 422 call)
       if (!spoken) {
         console.log('[MediVoice VAD] No speech detected during recording turn; safely skipping backend call.');
-        setErrorMessage(LOCALIZED_VOICE_FEEDBACK[activeLang].silence);
+        setErrorMessage(LOCALIZED_VOICE_FEEDBACK[activeLang === 'auto' ? (detectedTurnLang || 'en') : activeLang].silence);
         setVoiceState('listening');
         isSubmittingRef.current = false;
         window.setTimeout(() => {
@@ -411,7 +436,7 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
       // Guard 2: Audio too brief (< 600ms or < 800 bytes)
       if (speechDuration < 600 || audioBlob.size < 800) {
         console.log(`[MediVoice VAD] Audio too brief (${speechDuration}ms, ${audioBlob.size}B); prompting patient.`);
-        setErrorMessage(LOCALIZED_VOICE_FEEDBACK[activeLang].tooShort);
+        setErrorMessage(LOCALIZED_VOICE_FEEDBACK[activeLang === 'auto' ? (detectedTurnLang || 'en') : activeLang].tooShort);
         setVoiceState('listening');
         isSubmittingRef.current = false;
         window.setTimeout(() => {
@@ -427,7 +452,7 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
 
       clearWaitingTimer();
       const baseWaitingMsg =
-        WAITING_MESSAGES_BY_LANGUAGE[activeLang] || WAITING_MESSAGES_BY_LANGUAGE.en;
+        WAITING_MESSAGES_BY_LANGUAGE[activeLang === 'auto' ? (detectedTurnLang || 'en') : activeLang] || WAITING_MESSAGES_BY_LANGUAGE.en;
       let dotCount = 1;
       waitingTimerRef.current = window.setTimeout(() => {
         if (!isSessionActiveRef.current) return;
@@ -470,7 +495,7 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
         const reply = (result.assistant_reply || result.reply || '').trim();
 
         if (!transcript) {
-          setErrorMessage(LOCALIZED_VOICE_FEEDBACK[activeLang].unintelligible);
+          setErrorMessage(LOCALIZED_VOICE_FEEDBACK[activeLang === 'auto' ? (detectedTurnLang || 'en') : activeLang].unintelligible);
           setVoiceState('listening');
           isSubmittingRef.current = false;
           window.setTimeout(() => {
@@ -486,16 +511,32 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
         let audioUrlToPlay: string | null = null;
         let assistantAudioBlob: Blob | undefined;
         if (result.audio_base64) {
-          const audioBlobOut = base64ToBlob(
-            result.audio_base64,
-            result.audio_content_type || 'audio/wav'
-          );
-          assistantAudioBlob = audioBlobOut;
-          if (currentAudioUrlRef.current) {
-            URL.revokeObjectURL(currentAudioUrlRef.current);
+          logVoiceEvent(correlationId, 'audio_decoding_start', {
+            contentType: result.audio_content_type,
+            base64Length: result.audio_base64.length,
+          });
+          try {
+            const audioBlobOut = base64ToBlob(
+              result.audio_base64,
+              result.audio_content_type || 'audio/wav'
+            );
+            assistantAudioBlob = audioBlobOut;
+            if (currentAudioUrlRef.current) {
+              URL.revokeObjectURL(currentAudioUrlRef.current);
+            }
+            audioUrlToPlay = URL.createObjectURL(audioBlobOut);
+            currentAudioUrlRef.current = audioUrlToPlay;
+            logVoiceEvent(correlationId, 'audio_decoding_success', {
+              blobSize: audioBlobOut.size,
+            });
+          } catch (decodeErr) {
+            logVoiceEvent(correlationId, 'audio_decoding_error', { error: String(decodeErr) });
           }
-          audioUrlToPlay = URL.createObjectURL(audioBlobOut);
-          currentAudioUrlRef.current = audioUrlToPlay;
+        } else {
+          logVoiceEvent(correlationId, 'audio_omitted_or_missing', {
+            tts_error: result.tts_error,
+            tts_available: result.tts_available,
+          });
         }
 
         const isBookingCompleted =
@@ -507,7 +548,9 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
           audioAvailable: Boolean(audioUrlToPlay),
         });
 
-        if (result.language && (result.language as SupportedLanguage) !== activeLang) {
+        const turnDetectedLang = (result.detected_language as SupportedLanguage) || (result.language as SupportedLanguage) || 'en';
+        setDetectedTurnLang(turnDetectedLang);
+        if (activeLang !== 'auto' && result.language && (result.language as SupportedLanguage) !== activeLang) {
           selectedLanguageRef.current = result.language as SupportedLanguage;
         }
 
@@ -515,7 +558,7 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
         onVoiceTurnSuccess({
           userTranscript: transcript,
           assistantReply: reply,
-          language: (result.language as SupportedLanguage) || activeLang,
+          language: (result.language as SupportedLanguage) || turnDetectedLang,
           draft: result.draft,
           toolCalls: result.tool_calls || result.tool_trace,
           step: result.conversation_step || result.step,
@@ -583,7 +626,11 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
             return;
           }
           setVoiceState('assistant_speaking');
+          logVoiceEvent(correlationId, 'playback_start', { lang: result.language || activeLang });
           await playAudio(audioUrlToPlay, () => {
+            logVoiceEvent(correlationId, 'playback_complete', {
+              durationSinceResponse: performance.now() - responseReceived,
+            });
             logVoiceDiagnostic(correlationId, 'response_complete_playback_ms', performance.now() - responseReceived);
             if (!shouldResumeVoiceMode(isBookingCompleted)) {
               setVoiceState('idle');
@@ -592,22 +639,35 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
             // Continuous Conversation Loop with 200ms acoustic settling pause
             window.setTimeout(() => {
               if (isSessionActiveRef.current) {
+                logVoiceEvent(correlationId, 'listening_restart_after_playback');
                 logVoiceDiagnostic(correlationId, 'microphone_resume_after_response_ms', performance.now() - responseReceived);
                 startListening();
               }
             }, 200);
-          }, () => logVoiceDiagnostic(correlationId, 'speech_end_to_first_audio_ms', performance.now() - speechEndTime));
+          }, () => {
+            logVoiceEvent(correlationId, 'first_audible_chunk', {
+              latencyMs: performance.now() - speechEndTime,
+            });
+            logVoiceDiagnostic(correlationId, 'speech_end_to_first_audio_ms', performance.now() - speechEndTime);
+          });
         } else {
           // The unified backend already attempted TTS. Retrying a known provider failure
           // here duplicated the same expensive request and added another full TTS wait.
           if (result.tts_error) {
-            setVoiceState(isBookingCompleted ? 'idle' : 'assistant_speaking');
+            logVoiceEvent(correlationId, 'tts_error_handled', { error: result.tts_error });
             isSubmittingRef.current = false;
-            if (!isBookingCompleted) {
-              window.setTimeout(() => {
-                if (isSessionActiveRef.current) startListening();
-              }, 200);
+            if (!shouldResumeVoiceMode(isBookingCompleted)) {
+              setVoiceState('idle');
+              return;
             }
+            // Graceful pause: give the patient 2500ms to read the on-screen text before restarting listening
+            setVoiceState('idle');
+            window.setTimeout(() => {
+              if (isSessionActiveRef.current) {
+                logVoiceEvent(correlationId, 'listening_restart_after_tts_error');
+                startListening();
+              }
+            }, 2500);
             return;
           }
 
@@ -656,16 +716,16 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
           setErrorMessage('Network connection lost. Please check your internet connection.');
         } else if (err instanceof ApiError && err.status === 422) {
           // Empty or unintelligible speech - gracefully resume listening without repeating greeting
-          setErrorMessage(LOCALIZED_VOICE_FEEDBACK[activeLang].unintelligible);
+          setErrorMessage(LOCALIZED_VOICE_FEEDBACK[activeLang === 'auto' ? (detectedTurnLang || 'en') : activeLang].unintelligible);
           setVoiceState('listening');
           window.setTimeout(() => {
             if (isSessionActiveRef.current) startListening();
           }, 1500);
         } else if (err instanceof ApiError && err.status === 502) {
           setVoiceState('service_unavailable');
-          setErrorMessage(LOCALIZED_VOICE_FEEDBACK[activeLang].sttUnavailable);
+          setErrorMessage(LOCALIZED_VOICE_FEEDBACK[activeLang === 'auto' ? (detectedTurnLang || 'en') : activeLang].sttUnavailable);
         } else if (err instanceof ApiError && (err.status === 504 || err.status === 408)) {
-          setErrorMessage(LOCALIZED_VOICE_FEEDBACK[activeLang].timeout);
+          setErrorMessage(LOCALIZED_VOICE_FEEDBACK[activeLang === 'auto' ? (detectedTurnLang || 'en') : activeLang].timeout);
           setVoiceState('listening');
           window.setTimeout(() => {
             if (isSessionActiveRef.current) startListening();
@@ -675,7 +735,7 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
           setErrorMessage(
             err instanceof ApiError
               ? err.message
-              : LOCALIZED_VOICE_FEEDBACK[activeLang].genericError
+              : LOCALIZED_VOICE_FEEDBACK[activeLang === 'auto' ? (detectedTurnLang || 'en') : activeLang].genericError
           );
         }
       }
@@ -687,6 +747,11 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
   const startAudioVisualizerAndVad = useCallback(
     (stream: MediaStream) => {
       try {
+        if (animFrameRef.current) {
+          cancelAnimationFrame(animFrameRef.current);
+          animFrameRef.current = null;
+        }
+
         const AudioCtx =
           window.AudioContext ||
           (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -735,17 +800,17 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
           }
           const rms = Math.sqrt(sumSquares / timeData.length);
 
-          // 2. Compute frequency bars for live animated equalizer
+          // 2. Direct Canvas Waveform rendering (0 React state updates at 60 FPS)
           analyserRef.current.getByteFrequencyData(freqData);
-          const barHeights: number[] = [];
-          const step = Math.floor(freqData.length / 12) || 1;
-          for (let i = 0; i < 12; i++) {
-            const val = freqData[i * step] || 0;
-            const scaled = Math.max(12, Math.min(val * 0.75 + rms * 80, 72));
-            barHeights.push(scaled);
+          if (waveformCanvasRef.current) {
+            drawWaveformBars(waveformCanvasRef.current, freqData, rms, isPatientSpeakingRef.current);
           }
-          setWaveformBars(barHeights);
-          setAudioLevel(Math.max(0.12, Math.min(rms * 4.0, 1.0)));
+
+          // Directly modulate ambient glow scale via CSS transform (GPU accelerated, no layout reflow)
+          if (glowRef.current) {
+            const scale = 1 + Math.min(rms * 4.0, 1.0) * 0.45;
+            glowRef.current.style.transform = `scale(${scale.toFixed(3)})`;
+          }
 
           // 3. Dynamic ambient noise calibration (first 24 frames, ~400ms at 60fps)
           if (calibrationFrames < 24) {
@@ -765,12 +830,18 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
               // Confirmed speech detected!
               hasSpokenRef.current = true;
               silenceStartRef.current = null;
-              setIsPatientSpeaking(true);
+              if (!isPatientSpeakingRef.current) {
+                isPatientSpeakingRef.current = true;
+                setIsPatientSpeaking(true);
+              }
             }
           } else {
             consecutiveSpeechCount = 0;
             if (hasSpokenRef.current) {
-              setIsPatientSpeaking(false);
+              if (isPatientSpeakingRef.current) {
+                isPatientSpeakingRef.current = false;
+                setIsPatientSpeaking(false);
+              }
               // Patient spoke, now silent
               if (!silenceStartRef.current) {
                 silenceStartRef.current = performance.now();
@@ -817,10 +888,14 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     hasSpokenRef.current = false;
     silenceStartRef.current = null;
+    isPatientSpeakingRef.current = false;
     setIsPatientSpeaking(false);
     setRecordingDuration(0);
     setVoiceState('listening');
     setErrorMessage(null);
+    if (waveformCanvasRef.current) {
+      drawIdleWaveform(waveformCanvasRef.current);
+    }
 
     const stream = audioStreamRef.current;
     if (!stream) {
@@ -905,8 +980,9 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
         );
       }
 
+      const effectiveGreetingLang: SupportedLanguage = selectedLanguage === 'auto' ? 'en' : selectedLanguage;
       const greetingText =
-        GREETINGS_BY_LANGUAGE[selectedLanguage] || GREETINGS_BY_LANGUAGE.en;
+        GREETINGS_BY_LANGUAGE[effectiveGreetingLang] || GREETINGS_BY_LANGUAGE.en;
       if (!hasExistingConversation) {
         setAssistantResponse(greetingText);
       }
@@ -919,13 +995,13 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
       const greetingFetchPromise = hasExistingConversation
         ? Promise.resolve(null)
         : (async () => {
-            let blob = GREETING_BLOB_CACHE.get(selectedLanguage);
+            let blob = GREETING_BLOB_CACHE.get(effectiveGreetingLang);
             if (!blob) {
               blob = await medivoiceApi.synthesizeSpeech(
                 greetingText,
-                selectedLanguage
+                effectiveGreetingLang
               );
-              GREETING_BLOB_CACHE.set(selectedLanguage, blob);
+              GREETING_BLOB_CACHE.set(effectiveGreetingLang, blob);
             }
             const tTtsResp = performance.now();
             milestonesRef.current.ttsResponse = tTtsResp;
@@ -974,7 +1050,7 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
         // Synthesize and play greeting using Gnani Timbre TTS
         setVoiceState('speaking_greeting');
         if (onGreetingSpoken) {
-          onGreetingSpoken(greetingText, selectedLanguage);
+          onGreetingSpoken(greetingText, effectiveGreetingLang);
         }
 
         if (currentAudioUrlRef.current) {
@@ -1055,6 +1131,13 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
       }
     };
   }, []);
+
+  // Draw idle resting equalizer whenever entering listening state
+  useEffect(() => {
+    if (voiceState === 'listening' && waveformCanvasRef.current) {
+      drawIdleWaveform(waveformCanvasRef.current);
+    }
+  }, [voiceState]);
 
   // Explicitly end conversation
   const handleEndConversation = () => {
@@ -1165,9 +1248,21 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
             aria-expanded={isLangMenuOpen}
             aria-label="Select voice conversation language"
           >
-            <Globe className="w-3.5 h-3.5 text-[#25D9C3]" />
-            <span className="font-semibold text-violet-200">{currentLangMeta.name}</span>
-            <span className="text-white/60">({currentLangMeta.native})</span>
+            {selectedLanguage === 'auto' ? (
+              <>
+                <Sparkles className="w-3.5 h-3.5 text-[#25D9C3] animate-pulse" />
+                <span className="font-semibold text-emerald-200">Auto</span>
+                <span className="text-white/70 text-[11px] bg-white/10 px-1.5 py-0.5 rounded-md">
+                  {detectedTurnLang ? (VOICE_LANGUAGES.find(l => l.code === detectedTurnLang)?.name || detectedTurnLang) : 'Adaptive'}
+                </span>
+              </>
+            ) : (
+              <>
+                <Globe className="w-3.5 h-3.5 text-[#25D9C3]" />
+                <span className="font-semibold text-violet-200">{currentLangMeta.name}</span>
+                <span className="text-white/60">({currentLangMeta.native})</span>
+              </>
+            )}
             <ChevronDown className="w-3.5 h-3.5 text-white/60" />
           </button>
 
@@ -1191,7 +1286,10 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
                   }`}
                 >
                   <div className="flex flex-col">
-                    <span className="font-medium">{lang.name}</span>
+                    <span className="font-medium flex items-center gap-1.5">
+                      {lang.code === 'auto' && <Sparkles className="w-3.5 h-3.5 text-[#25D9C3]" />}
+                      {lang.name}
+                    </span>
                     <span className="text-xs text-white/50">{lang.native}</span>
                   </div>
                   {selectedLanguage === lang.code && <Check className="w-4 h-4 text-[#25D9C3]" />}
@@ -1245,12 +1343,14 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
       <div className="relative z-10 flex flex-col items-center justify-center text-center my-auto py-6 sm:py-8 max-w-2xl mx-auto w-full">
         {/* Animated Radial Glowing AI Orb */}
         <div className="relative mb-6 flex items-center justify-center">
-          {/* Outer Ambient Glow Reacting to Audio Level */}
+          {/* Outer Ambient Glow Reacting to Audio Level via GPU Transform */}
           <div
+            ref={glowRef}
             className="absolute rounded-full transition-transform duration-150 ease-out pointer-events-none"
             style={{
-              width: `${200 + (voiceState === 'listening' || voiceState === 'assistant_speaking' || voiceState === 'speaking_greeting' ? audioLevel * 90 : 0)}px`,
-              height: `${200 + (voiceState === 'listening' || voiceState === 'assistant_speaking' || voiceState === 'speaking_greeting' ? audioLevel * 90 : 0)}px`,
+              width: '200px',
+              height: '200px',
+              transform: 'scale(1)',
               background:
                 voiceState === 'listening'
                   ? isPatientSpeaking
@@ -1317,19 +1417,18 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
               </div>
             )}
 
-            {/* State 3: Listening */}
+            {/* State 3: Listening (Direct Canvas Waveform - 0 React reconciliation cycles) */}
             {voiceState === 'listening' && (
               <div className="flex flex-col items-center gap-2">
-                <div className="flex items-center gap-1.5 h-9 sm:h-11">
-                  {waveformBars.slice(0, 8).map((h, idx) => (
-                    <div
-                      key={idx}
-                      className={`w-1.5 sm:w-2 rounded-full transition-all duration-75 ${
-                        isPatientSpeaking ? 'bg-[#25D9C3] shadow-[0_0_8px_#25D9C3]' : 'bg-white/80'
-                      }`}
-                      style={{ height: `${Math.max(10, h * 0.65)}px` }}
-                    />
-                  ))}
+                <div className="flex items-center justify-center h-9 sm:h-11">
+                  <canvas
+                    ref={waveformCanvasRef}
+                    width={120}
+                    height={44}
+                    className="w-24 h-9 sm:h-11"
+                    aria-label={isPatientSpeaking ? 'Patient speaking detected' : 'Microphone listening'}
+                    role="img"
+                  />
                 </div>
                 <span className="text-xs font-mono font-bold text-white bg-black/40 px-3 py-0.5 rounded-full border border-white/10">
                   {formatTimer(recordingDuration)}
@@ -1411,7 +1510,7 @@ export const MediVoiceVoicePanel: React.FC<MediVoiceVoicePanelProps> = ({
                 Welcome to Aarogya One Hospital
               </h3>
               <p className="text-xs sm:text-sm text-white/90 italic line-clamp-2 max-w-md">
-                "{assistantResponse || GREETINGS_BY_LANGUAGE[selectedLanguage]}"
+                "{assistantResponse || GREETINGS_BY_LANGUAGE[selectedLanguage === 'auto' ? 'en' : selectedLanguage]}"
               </p>
             </>
           )}

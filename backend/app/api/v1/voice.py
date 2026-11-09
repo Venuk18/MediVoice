@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import base64
 import json
@@ -46,6 +47,8 @@ class VoiceTurnResponse(BaseModel):
     session_id: str
     reply: str
     language: str
+    language_mode: Optional[str] = "auto"
+    preferred_language: Optional[str] = None
     step: str
     confirmation_status: str
     draft: Dict[str, Any]
@@ -123,7 +126,8 @@ async def transcribe_audio(
     try:
         audio_bytes = await file.read()
         stt = GnaniPrismaSTT()
-        result = stt.transcribe(
+        result = await asyncio.to_thread(
+            stt.transcribe,
             audio_bytes=audio_bytes,
             language=language,
             content_type=file.content_type,
@@ -233,7 +237,8 @@ async def voice_respond(
         request_arrival = time.perf_counter()
         audio_bytes = await file.read()
         upload_read_ms = (time.perf_counter() - request_arrival) * 1000
-        result = voice_orchestrator.process_voice_turn(
+        result = await asyncio.to_thread(
+            voice_orchestrator.process_voice_turn,
             db=db,
             audio_bytes=audio_bytes,
             session_id=session_id,
@@ -280,7 +285,8 @@ async def voice_respond_text(
     try:
         started = time.perf_counter()
         audio_bytes = await file.read()
-        result = voice_orchestrator.process_voice_turn(
+        result = await asyncio.to_thread(
+            voice_orchestrator.process_voice_turn,
             db=db,
             audio_bytes=audio_bytes,
             session_id=session_id,

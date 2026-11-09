@@ -1,8 +1,9 @@
 export type SupportedLanguage = 'en' | 'te' | 'ta' | 'kn' | 'hi';
+export type VoiceLanguagePreference = SupportedLanguage | 'auto';
 
-export type StaffRoleType = 'DOCTOR' | 'LAB_OPERATOR' | 'MAINTENANCE_STAFF' | 'ADMIN';
+export type StaffRoleType = 'DOCTOR' | 'LAB_OPERATOR' | 'MAINTENANCE_STAFF' | 'ADMIN' | 'DEMO_VIEWER';
 
-export type WorkspaceTab = 'patient' | 'doctor' | 'lab' | 'maintenance';
+export type WorkspaceTab = 'patient' | 'doctor' | 'lab' | 'maintenance' | 'demo';
 
 export type AppRoutePath =
   | '/'
@@ -13,6 +14,7 @@ export type AppRoutePath =
   | '/support'
   | '/medivoice'
   | '/staff/login'
+  | '/staff/demo'
   | '/login'
   | '/doctor'
   | '/doctor/appointments'
@@ -466,6 +468,7 @@ export interface VoiceTurnResponse {
   reply: string;
   assistant_reply?: string;
   language: string;
+  language_mode?: string;
   step: string;
   conversation_step?: string;
   confirmation_status: string;
