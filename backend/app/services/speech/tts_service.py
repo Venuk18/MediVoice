@@ -105,11 +105,13 @@ def clean_text_for_speech(text: str) -> str:
     cleaned = re.sub(r"<[^>]+>", "", cleaned)
     # Strip markdown links
     cleaned = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", cleaned)
+    # Strip full UUIDs
+    cleaned = re.sub(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", "", cleaned, flags=re.IGNORECASE)
     # Strip technical slot/doctor/patient IDs and prefixes
-    cleaned = re.sub(r"\b(?:Slot\s*ID|Doctor\s*ID|Patient\s*ID|Reference\s*ID)\s*[:#-]?\s*[A-Za-z0-9_-]+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(?:Slot\s*ID|Doctor\s*ID|Patient\s*ID|Patient\s*Reference|Reference\s*ID|Appointment\s*ID)\s*[:#-]?\s*[A-Za-z0-9_-]+", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\b(?:slot|doc)-[A-Za-z0-9_-]+\b", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\bPAT-\d+-[A-Za-z0-9-]+\b", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\bAPT-\d+-[A-Za-z0-9-]+\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bPAT-[A-Za-z0-9-]+\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bAPT-[A-Za-z0-9-]+\b", "", cleaned, flags=re.IGNORECASE)
     # Optimization: Condense long spoken slot/appointment listings (keep top 3 items for voice)
     # Full list remains visible on screen; speech stays concise, pleasant, and fast.
     lines = cleaned.splitlines()

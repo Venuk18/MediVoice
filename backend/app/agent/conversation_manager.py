@@ -38,6 +38,7 @@ from app.agent.adapters import (
     format_insurance_search_reply,
     format_lab_verification_reply,
     format_localized_message,
+    format_spoken_appointment_confirmation,
     format_slot_display,
     get_specialist_plural,
     format_human_slot_time,
@@ -214,6 +215,7 @@ class ConversationManager:
         """
         t_start = time.perf_counter()
         session = self.get_or_create_session(session_id, patient_reference)
+        session.spoken_reply = None
         session.last_active_at = datetime.now(timezone.utc).isoformat()
         session.language = detect_language(message, session.language)
         lang = session.language
@@ -962,7 +964,9 @@ class ConversationManager:
                             appointment_status=d_res.get("appointment_status"),
                             patient_reference=d_res.get("patient_reference"),
                         )
+                    session.spoken_reply = format_spoken_appointment_confirmation(d_res, lang=lang, notification_sent=False)
                 else:
+                    session.spoken_reply = None
                     final_reply = format_localized_message(
                         lang,
                         "booking_failed",
@@ -1023,6 +1027,7 @@ class ConversationManager:
                             appointment_status=tool_res.data.get("appointment_status"),
                             patient_reference=tool_res.data.get("patient_reference"),
                         )
+                        session.spoken_reply = format_spoken_appointment_confirmation(tool_res.data, lang=lang, notification_sent=False)
                     else:
                         # Slot unavailable, concurrent booking conflict, or validation error
                         session.step = ConversationStep.COLLECTING_SLOT
@@ -1030,6 +1035,7 @@ class ConversationManager:
                         session.draft.slot_start_time = None
                         session.confirmation_status = ConfirmationStatus.NONE
                         session.confirmed_draft_fingerprint = None
+                        session.spoken_reply = None
                         final_reply = format_localized_message(
                             lang,
                             "booking_failed",
@@ -1624,6 +1630,7 @@ class ConversationManager:
         return ChatResponse(
             session_id=session.session_id,
             reply=clean_reply,
+            spoken_reply=session.spoken_reply,
             language=session.language,
             step=session.step,
             draft=session.draft,

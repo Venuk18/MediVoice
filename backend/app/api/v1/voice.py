@@ -46,6 +46,7 @@ class VoiceTurnResponse(BaseModel):
     gnani_stt_language: Optional[str] = None
     session_id: str
     reply: str
+    spoken_reply: Optional[str] = None
     language: str
     language_mode: Optional[str] = "auto"
     preferred_language: Optional[str] = None

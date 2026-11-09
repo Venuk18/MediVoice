@@ -181,12 +181,13 @@ class VoiceOrchestrator:
         try:
             t_tts_start = time.perf_counter()
             resolved_lang = chat_response.language or session.language or effective_lang
+            tts_text = chat_response.spoken_reply if getattr(chat_response, "spoken_reply", None) else chat_response.reply
             # Dynamically select TTS voice/language matching the actual assistant reply script
-            reply_script_lang = detect_script_language(chat_response.reply)
+            reply_script_lang = detect_script_language(tts_text)
             tts_lang = reply_script_lang or resolved_lang
             if synthesize_audio:
                 audio_bytes_out = self.tts.synthesize(
-                    text=chat_response.reply,
+                    text=tts_text,
                     language=tts_lang,
                 )
                 tts_ms = (time.perf_counter() - t_tts_start) * 1000
@@ -255,6 +256,7 @@ class VoiceOrchestrator:
             "gnani_stt_language": stt_result.get("language_code"),
             "session_id": chat_response.session_id,
             "reply": chat_response.reply,
+            "spoken_reply": getattr(chat_response, "spoken_reply", None),
             "language": resolved_lang,
             "step": chat_response.step.value,
             "confirmation_status": chat_response.confirmation_status.value,

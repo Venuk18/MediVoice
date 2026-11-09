@@ -13,7 +13,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Tuple
 
 import httpx
 
@@ -940,6 +940,230 @@ def format_slot_display(slot_id: Optional[str], slot_start_time: Optional[str], 
     return "Unspecified"
 
 
+DEPARTMENT_NAMES_LOCALIZED: Dict[str, Dict[str, str]] = {
+    "te": {
+        "Cardiology": "కార్డియాలజీ",
+        "Neurology": "న్యూరాలజీ",
+        "Orthopedics": "ఆర్థోపెడిక్స్",
+        "Pediatrics": "పీడియాట్రిక్స్",
+        "General Medicine": "జనరల్ మెడిసిన్",
+        "Dermatology": "డెర్మటాలజీ",
+        "Gynecology": "గైనకాలజీ",
+        "ENT": "ఈఎన్‌టీ",
+        "Ophthalmology": "ఆప్తాల్మాలజీ",
+        "Dental": "దంత వైద్యం",
+    },
+    "hi": {
+        "Cardiology": "कार्डियोलॉजी",
+        "Neurology": "न्यूरोलॉजी",
+        "Orthopedics": "ऑर्थोपेडिक्स",
+        "Pediatrics": "बाल रोग (पीडियाट्रिक्स)",
+        "General Medicine": "जनरल मेडिसिन",
+        "Dermatology": "त्वचा रोग",
+        "Gynecology": "स्त्री रोग",
+    },
+    "ta": {
+        "Cardiology": "இதயவியல் (கார்டியாலஜி)",
+        "Neurology": "நரம்பியல்",
+        "Orthopedics": "எலும்பியல்",
+        "Pediatrics": "குழந்தைகள் நலம்",
+        "General Medicine": "பொது மருத்துவம்",
+    },
+    "kn": {
+        "Cardiology": "ಹೃದ್ರೋಗ ಶಾಸ್ತ್ರ (ಕಾರ್ಡಿಯಾಲಜಿ)",
+        "Neurology": "ನರವಿಜ್ಞಾನ",
+        "Orthopedics": "ಮೂಳೆಶಾಸ್ತ್ರ",
+        "Pediatrics": "ಮಕ್ಕಳ ಚಿಕಿತ್ಸೆ",
+        "General Medicine": "ಸಾಮಾನ್ಯ ಔಷಧ",
+    },
+}
+
+DOCTOR_NAMES_LOCALIZED: Dict[str, Dict[str, str]] = {
+    "te": {
+        "Dr. Rajesh Sharma": "డాక్టర్ రాజేష్ శర్మ",
+        "Rajesh Sharma": "డాక్టర్ రాజేష్ శర్మ",
+        "Dr. Priya Patel": "డాక్టర్ ప్రియా పటేల్",
+        "Priya Patel": "డాక్టర్ ప్రియా పటేల్",
+        "Dr. Sneha Reddy": "డాక్టర్ స్నేహ రెడ్డి",
+        "Sneha Reddy": "డాక్టర్ స్నేహ రెడ్డి",
+        "Dr. Suresh Varma": "డాక్టర్ సురేష్ వర్మ",
+        "Suresh Varma": "డాక్టర్ సురేష్ వర్మ",
+        "Dr. Ananya Rao": "డాక్టర్ అనన్య రావు",
+        "Ananya Rao": "డాక్టర్ అనన్య రావు",
+        "Dr. Vikram Seth": "డాక్టర్ విక్రమ్ సేథ్",
+        "Vikram Seth": "డాక్టర్ విక్రమ్ సేథ్",
+        "Dr. Ramesh Gupta": "డాక్టర్ రమేష్ గుప్తా",
+        "Ramesh Gupta": "డాక్టర్ రమేష్ గుప్తా",
+    },
+    "hi": {
+        "Dr. Rajesh Sharma": "डॉक्टर राजेश शर्मा",
+        "Rajesh Sharma": "डॉक्टर राजेश शर्मा",
+        "Dr. Priya Patel": "डॉक्टर प्रिया पटेल",
+        "Priya Patel": "डॉक्टर प्रिया पटेल",
+        "Dr. Sneha Reddy": "डॉक्टर स्नेहा रेड्डी",
+        "Sneha Reddy": "डॉक्टर स्नेहा रेड्डी",
+        "Dr. Suresh Varma": "डॉक्टर सुरेश वर्मा",
+        "Suresh Varma": "डॉक्टर सुरेश वर्मा",
+    },
+}
+
+
+def format_human_date_and_time(start_time: Optional[str], lang: str = "en") -> Tuple[str, str]:
+    """
+    Formats ISO slot start_time into a tuple of (localized_date, localized_time).
+    """
+    if not start_time:
+        return ("", "")
+    try:
+        from datetime import datetime, timezone, timedelta
+        dt = datetime.fromisoformat(start_time.replace("Z", "+00:00").replace(" ", "T"))
+        india_timezone = timezone(timedelta(hours=5, minutes=30))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=india_timezone)
+        else:
+            dt = dt.astimezone(india_timezone)
+        year = dt.year
+        month = dt.month
+        day = dt.day
+        hour = dt.hour
+        minute = dt.minute
+
+        hour_12 = 12 if hour in (0, 12) else hour % 12
+        min_str = f"{minute:02d}"
+
+        clean_lang = lang.split("-")[0].lower() if lang else "en"
+        months = MONTHS_BY_LANG.get(clean_lang, MONTHS_BY_LANG["en"])
+        month_name = months.get(month, MONTHS_BY_LANG["en"][month])
+
+        if clean_lang == "te":
+            date_str = f"{day} {month_name} {year}"
+            if hour < 12:
+                period = "ఉదయం"
+            elif 12 <= hour < 16:
+                period = "మధ్యాహ్నం"
+            elif 16 <= hour < 20:
+                period = "సాయంత్రం"
+            else:
+                period = "రాత్రి"
+            time_str = f"{period} {hour_12}:{min_str} గంటలకు"
+            return (date_str, time_str)
+        elif clean_lang == "hi":
+            date_str = f"{day} {month_name} {year}"
+            if hour < 12:
+                period = "सुबह"
+            elif 12 <= hour < 16:
+                period = "दोपहर"
+            elif 16 <= hour < 20:
+                period = "शाम"
+            else:
+                period = "रात"
+            time_str = f"{period} {hour_12}:{min_str} बजे"
+            return (date_str, time_str)
+        elif clean_lang == "ta":
+            date_str = f"{day} {month_name} {year}"
+            if hour < 12:
+                period = "காலை"
+            elif 12 <= hour < 16:
+                period = "மதியம்"
+            elif 16 <= hour < 20:
+                period = "மாலை"
+            else:
+                period = "இரவு"
+            time_str = f"{period} {hour_12}:{min_str} மணிக்கு"
+            return (date_str, time_str)
+        elif clean_lang == "kn":
+            date_str = f"{day} {month_name} {year}"
+            if hour < 12:
+                period = "ಬೆಳಿಗ್ಗೆ"
+            elif 12 <= hour < 16:
+                period = "ಮಧ್ಯಾಹ್ನ"
+            elif 16 <= hour < 20:
+                period = "ಸಂಜೆ"
+            else:
+                period = "ರಾತ್ರಿ"
+            time_str = f"{period} {hour_12}:{min_str} ಗಂಟೆಗೆ"
+            return (date_str, time_str)
+        else:
+            date_str = f"{month_name} {day}, {year}"
+            period = "AM" if hour < 12 else "PM"
+            time_str = f"{hour_12}:{min_str} {period}"
+            return (date_str, time_str)
+    except Exception:
+        return (start_time or "", "")
+
+
+def format_spoken_appointment_confirmation(
+    booked_data: Dict[str, Any],
+    lang: str = "en",
+    notification_sent: bool = False,
+) -> str:
+    """
+    Produces a natural, concise, and professional spoken confirmation for TTS synthesis.
+    Contains NO UUIDs, NO reference IDs, NO database IDs, and NO raw technical metadata.
+    Strictly follows truthful notification reporting.
+    """
+    if not booked_data:
+        return ""
+    clean_lang = lang.split("-")[0].lower() if lang else "en"
+
+    raw_doc = (booked_data.get("doctor_name") or "").strip()
+    raw_dept = (booked_data.get("department_name") or booked_data.get("specialty") or "General Medicine").strip()
+    start_time = booked_data.get("appointment_start_time")
+
+    date_str, time_str = format_human_date_and_time(start_time, lang=clean_lang)
+
+    dept_str = DEPARTMENT_NAMES_LOCALIZED.get(clean_lang, {}).get(raw_dept, raw_dept)
+
+    if clean_lang == "te":
+        doc_str = DOCTOR_NAMES_LOCALIZED.get("te", {}).get(raw_doc)
+        if not doc_str:
+            doc_str = re.sub(r"^(?:dr\.?|doctor)\s*", "డాక్టర్ ", raw_doc, flags=re.IGNORECASE)
+            if not doc_str.startswith("డాక్టర్ "):
+                doc_str = f"డాక్టర్ {doc_str}"
+        notif_str = (
+            "మీ అపాయింట్మెంట్ వివరాలు మీ నమోదిత మొబైల్ నంబర్‌కు పంపబడ్డాయి."
+            if notification_sent
+            else "మీ అపాయింట్‌మెంట్ నిర్ధారణ వివరాలు ఇక్కడ అందుబాటులో ఉన్నాయి."
+        )
+        return (
+            f"మీ అపాయింట్‌మెంట్ విజయవంతంగా బుక్ చేయబడింది! ఇక్కడ మీ అపాయింట్‌మెంట్ వివరాలు ఉన్నాయి. "
+            f"డాక్టర్: {doc_str}. విభాగం: {dept_str}. తేదీ: {date_str}. సమయం: {time_str}. "
+            f"{notif_str} ఆరోగ్య వన్ హాస్పిటల్‌ను ఎంచుకున్నందుకు ధన్యవాదాలు."
+        )
+
+    elif clean_lang == "hi":
+        doc_str = DOCTOR_NAMES_LOCALIZED.get("hi", {}).get(raw_doc)
+        if not doc_str:
+            doc_str = re.sub(r"^(?:dr\.?|doctor)\s*", "डॉक्टर ", raw_doc, flags=re.IGNORECASE)
+            if not doc_str.startswith("डॉक्टर "):
+                doc_str = f"डॉक्टर {doc_str}"
+        notif_str = (
+            "आपके अपॉइंटमेंट का विवरण आपके पंजीकृत मोबाइल नंबर पर भेज दिया गया है।"
+            if notification_sent
+            else "आपके अपॉइंटमेंट पुष्टिकरण विवरण यहाँ उपलब्ध हैं।"
+        )
+        return (
+            f"आपका अपॉइंटमेंट सफलतापूर्वक बुक हो गया है! यहाँ आपके अपॉइंटमेंट का विवरण है। "
+            f"डॉक्टर: {doc_str}। विभाग: {dept_str}। तारीख: {date_str}। समय: {time_str}। "
+            f"{notif_str} आरोग्य वन अस्पताल चुनने के लिए धन्यवाद।"
+        )
+
+    else:
+        doc_str = raw_doc
+        if not doc_str.lower().startswith("dr.") and not doc_str.lower().startswith("doctor "):
+            doc_str = f"Dr. {doc_str}" if doc_str else "Dr. Specialist"
+        notif_str = (
+            "Your appointment details have been sent to your registered mobile number."
+            if notification_sent
+            else "Your appointment confirmation details are available here."
+        )
+        return (
+            f"Your appointment has been successfully booked! Here are your appointment details. "
+            f"Doctor: {doc_str}. Department: {dept_str}. Date: {date_str}. Time: {time_str}. "
+            f"{notif_str} Thank you for choosing Aarogya One Hospital."
+        )
+
+
 def sanitize_patient_facing_text(text: str, lang: str = "en") -> str:
     """Remove internal slot identifiers from any text returned or spoken to patients."""
     clean_lang = lang.split("-")[0].lower() if lang else "en"
@@ -1574,7 +1798,7 @@ def is_forgot_patient_ref_reply(text: str) -> bool:
 
 
 def extract_phone_number_candidate(text: str) -> Optional[str]:
-    """Extracts a valid 10-digit mobile phone candidate from a message, including spoken/Indic words."""
+    """Extracts a valid 10-digit Indian mobile phone candidate (^[6-9]\\d{9}$) from a message, including spoken/Indic words."""
     if not text:
         return None
 
@@ -1586,15 +1810,10 @@ def extract_phone_number_candidate(text: str) -> Optional[str]:
     except Exception:
         pass
 
-    # 1. Match standard 10 digit Indian number with optional +91 or 91
-    m = re.search(r"(?:\+?91[\s-]?)?([6-9]\d{9})\b", text)
+    # Match standard 10 digit Indian number starting with 6, 7, 8, 9 with optional +91, 91 or 0
+    m = re.findall(r"(?:\+?91[\s-]?|0)?([6-9]\d{9})\b", text)
     if m:
-        return m.group(1)
-
-    # 2. General 10-digit sequence
-    m2 = re.search(r"\b(\d{10})\b", text)
-    if m2:
-        return m2.group(1)
+        return m[-1]
 
     return None
 
@@ -2523,6 +2742,8 @@ LOCALIZED_MESSAGES: Dict[str, Dict[str, str]] = {
 
         ),
 
+        "invalid_phone": "Please provide a valid 10-digit mobile number so we can register and confirm your appointment.",
+
     },
 
     "te": {
@@ -2955,6 +3176,8 @@ LOCALIZED_MESSAGES: Dict[str, Dict[str, str]] = {
 
         ),
 
+        "invalid_phone": "దయచేసి మీ 10 అంకెల మొబైల్ నంబర్‌ను తెలియజేయండి, తద్వారా మేము మీ అపాయింట్‌మెంట్‌ను నమోదు చేసి నిర్ధారించగలము.",
+
     },
 
     "ta": {
@@ -3307,6 +3530,8 @@ LOCALIZED_MESSAGES: Dict[str, Dict[str, str]] = {
 
         ),
 
+        "invalid_phone": "உங்கள் அப்பாயிண்ட்மென்ட்டைப் பதிவுசெய்து உறுதிப்படுத்த சரியான 10 இலக்க மொபைல் எண்ணை வழங்கவும்.",
+
     },
 
     "kn": {
@@ -3654,6 +3879,8 @@ LOCALIZED_MESSAGES: Dict[str, Dict[str, str]] = {
             "AI ಸೇವೆ ತಾತ್ಕಾಲಿಕವಾಗಿ ಲಭ್ಯವಿಲ್ಲ ({reason}). ದಯವಿಟ್ಟು ಸ್ವಲ್ಪ ಸಮಯದ ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ."
 
         ),
+
+        "invalid_phone": "ನಿಮ್ಮ ಅಪಾಯಿಂಟ್‌ಮೆಂಟ್ ನೋಂದಾಯಿಸಲು మరియు ದೃಢೀಕರಿಸಲು ದಯವಿಟ್ಟು ಮಾನ್ಯವಾದ 10-ಅಂಕಿಯ ಮೊಬೈಲ್ ಸಂಖ್ಯೆಯನ್ನು ಒದಗಿಸಿ.",
 
     },
 
@@ -4118,6 +4345,8 @@ LOCALIZED_MESSAGES: Dict[str, Dict[str, str]] = {
             "AI सेवा अस्थायी रूप से अनुपलब्ध है ({reason})। कृपया थोड़ी देर बाद पुनः प्रयास करें।"
 
         ),
+
+        "invalid_phone": "कृपया अपना वैध 10 अंकों का मोबाइल नंबर प्रदान करें ताकि हम आपका अपॉइंटमेंट पंजीकृत और पुष्टि कर सकें।",
 
     },
 
@@ -9248,13 +9477,9 @@ class MockReasoningAdapter(BaseReasoningAdapter):
                     )
 
                 else:
-
                     return AgentAction(
-
-                        reply="Please provide a valid 10-digit mobile number so we can register and send your appointment confirmation.",
-
+                        reply=format_localized_message(lang, "invalid_phone"),
                         tool_call=None,
-
                     )
 
 
@@ -9332,6 +9557,16 @@ class MockReasoningAdapter(BaseReasoningAdapter):
                     return AgentAction(
 
                         reply=format_localized_message(lang, "welcome_new_patient_ask_name"),
+
+                        tool_call=None,
+
+                    )
+
+                elif session_state.pending_action == "COLLECTING_EXISTING_PATIENT_PHONE":
+
+                    return AgentAction(
+
+                        reply=format_localized_message(lang, "invalid_phone"),
 
                         tool_call=None,
 

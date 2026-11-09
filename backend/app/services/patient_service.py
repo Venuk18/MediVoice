@@ -21,64 +21,99 @@ INDIC_DIGITS_MAP = {
 
 SPOKEN_DIGIT_WORDS_MAP: Dict[str, str] = {
     "zero": "0", "oh": "0", "o": "0", "nil": "0", "null": "0",
-    "సున్నా": "0", "sunna": "0",
+    "సున్నా": "0", "sunna": "0", "జీరో": "0",
     "शून्य": "0", "shunya": "0",
     "பூஜ்ஜியம்": "0", "சுழி": "0", "poojiyam": "0", "poojyam": "0",
     "ಸೊನ್ನೆ": "0", "sonne": "0",
 
-    "one": "1",
-    "ఒకటి": "1", "ఒక": "1", "okati": "1", "oka": "1",
+    "one": "1", "won": "1",
+    "ఒకటి": "1", "ఒక": "1", "okati": "1", "oka": "1", "వన్": "1", "వన్‌": "1",
     "एक": "1", "ek": "1",
     "ஒன்று": "1", "ஒன்னு": "1", "ondru": "1", "onnu": "1",
     "ಒಂದು": "1", "ondu": "1",
 
-    "two": "2",
-    "రెండు": "2", "rendu": "2",
+    "two": "2", "to": "2", "too": "2",
+    "రెండు": "2", "rendu": "2", "టూ": "2",
     "दो": "2", "do": "2",
     "இரண்டு": "2", "ரெண்டு": "2", "irandu": "2",
     "ಎರಡು": "2", "eradu": "2",
 
     "three": "3",
-    "మూడు": "3", "moodu": "3", "mudu": "3",
+    "మూడు": "3", "moodu": "3", "mudu": "3", "త్రీ": "3",
     "तीन": "3", "teen": "3", "tin": "3",
     "மூன்று": "3", "மூணு": "3", "moondru": "3", "moonu": "3",
     "ಮೂರು": "3", "mooru": "3",
 
-    "four": "4",
-    "నాలుగు": "4", "naalugu": "4", "nalugu": "4",
+    "four": "4", "for": "4", "fore": "4",
+    "నాలుగు": "4", "naalugu": "4", "nalugu": "4", "ఫోర్": "4",
     "चार": "4", "chaar": "4", "char": "4",
     "நான்கு": "4", "நாலு": "4", "naangu": "4", "naalu": "4",
     "ನಾಲ್ಕು": "4", "naalku": "4", "nalku": "4",
 
     "five": "5",
-    "ఐదు": "5", "aidu": "5",
+    "ఐదు": "5", "aidu": "5", "ayidu": "5", "ఫైవ్": "5",
     "पाँच": "5", "पांच": "5", "paanch": "5", "panch": "5",
     "ஐந்து": "5", "அஞ்சு": "5", "aindhu": "5", "anju": "5",
     "ಐದು": "5",
 
     "six": "6",
-    "ఆరు": "6", "aaru": "6",
+    "ఆరు": "6", "aaru": "6", "aru": "6", "సిక్స్": "6",
     "छह": "6", "छ:": "6", "chhah": "6", "chhe": "6",
     "ஆறு": "6",
     "ಆರು": "6",
 
     "seven": "7",
-    "ఏడు": "7", "yedu": "7", "edu": "7",
+    "ఏడు": "7", "yedu": "7", "edu": "7", "సెవెన్": "7",
     "सात": "7", "saat": "7",
     "ஏழு": "7", "ezhu": "7", "elu": "7",
     "ಏಳು": "7", "yelu": "7",
 
-    "eight": "8",
-    "ఎనిమిది": "8", "enimidi": "8",
+    "eight": "8", "ate": "8",
+    "ఎనిమిది": "8", "enimidi": "8", "yenimidi": "8", "ఎన్మిది": "8", "enmidi": "8", "ఎయిట్": "8",
     "आठ": "8", "aath": "8", "aat": "8",
     "எட்டு": "8", "ettu": "8",
     "ಎಂಟು": "8", "entu": "8",
 
     "nine": "9",
-    "తొమ్మిది": "9", "tommidi": "9",
+    "తొమ్మిది": "9", "tommidi": "9", "thommidi": "9", "నైన్": "9",
     "नौ": "9", "nau": "9",
     "ஒன்பது": "9", "onbadhu": "9", "onbathu": "9",
     "ಒಂಬತ್ತು": "9", "ombattu": "9",
+}
+
+SPOKEN_TENS_WORDS_MAP: Dict[str, int] = {
+    # English tens & teens
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "twenty": 20, "thirty": 30, "forty": 40, "fourty": 40, "fifty": 50, "sixty": 60,
+    "seventy": 70, "eighty": 80, "ninety": 90,
+
+    # Telugu tens & teens
+    "పది": 10, "padi": 10,
+    "పదకొండు": 11, "padakondu": 11,
+    "పన్నెండు": 12, "pannendu": 12,
+    "పదమూడు": 13, "padamoodu": 13,
+    "పద్నాలుగు": 14, "padnaalugu": 14,
+    "పదిహేను": 15, "padihenu": 15,
+    "పదహారు": 16, "padahaaru": 16,
+    "పదిహేడు": 17, "padihedu": 17,
+    "పద్దెనిమిది": 18, "paddenimidi": 18,
+    "పంతొమ్మిది": 19, "panthommidi": 19,
+    "ఇరవై": 20, "ఇరువై": 20, "iravai": 20, "iravay": 20,
+    "ముప్పై": 30, "muppai": 30, "muppay": 30,
+    "నలభై": 40, "నలబై": 40, "nalabhai": 40, "nalbhai": 40, "nalaphai": 40,
+    "యాభై": 50, "యాబై": 50, "yabhai": 50, "yabai": 50,
+    "అరవై": 60, "aravai": 60, "aravay": 60,
+    "డెబ్బై": 70, "debbai": 70, "debbay": 70,
+    "ఎనభై": 80, "ఎనబై": 80, "enabhai": 80, "yenabhai": 80,
+    "తొంభై": 90, "తొంబై": 90, "tombhai": 90, "thombai": 90, "thombhai": 90,
+
+    # Hindi tens & teens
+    "दस": 10, "das": 10, "बीस": 20, "bees": 20, "तीस": 30, "tees": 30,
+    "चालीस": 40, "chalis": 40, "पचास": 50, "pachaas": 50, "साठ": 60, "saath": 60,
+    "सत्तर": 70, "sattar": 70, "अस्सी": 80, "assi": 80, "नब्बे": 90, "nabbe": 90,
+    "ग्यारह": 11, "बारह": 12, "तेरह": 13, "चौदह": 14, "पंद्रह": 15, "सोलह": 16,
+    "सत्रह": 17, "अठारह": 18, "उन्नीस": 19,
 }
 
 DOUBLE_TOKENS = {"double", "డబుల్", "डबल", "டபுள்", "ಡಬಲ್"}
@@ -88,51 +123,123 @@ TRIPLE_TOKENS = {"triple", "ట్రిపుల్", "ट्रिपल", "�
 def normalize_spoken_phone_number(text: str) -> Optional[str]:
     """
     Normalizes spoken phone number representations across English, Telugu, Hindi, Tamil, and Kannada.
-    Supports continuous digit strings, spaced digits, spoken digit words, Indic numerals, and multipliers (double/triple).
-    Requires exactly 10 digits after normalization. Rejects incomplete, malformed, or extra-digit sequences.
+    Supports continuous digit strings, spaced digits, spoken digit words, spoken pairs/tens (e.g. ninety eight, తొంభై ఎనిమిది),
+    Indic numerals, natural conversational corrections (e.g. 'wait no', 'కాదు', 'wait not 0, 1'), and multipliers (double/triple).
+    Strictly validates Indian mobile format (^[6-9]\\d{9}$). Rejects incomplete, malformed, non-phone dates/times, or non-Indian sequences.
     """
     if not text or not text.strip():
         return None
+
+    # Step 1: Pre-process Indic numerals to ASCII digits
     processed = text
     for k, v in INDIC_DIGITS_MAP.items():
         processed = processed.replace(k, v)
 
+    # Check if input has explicit conversational correction keywords
+    has_correction = bool(re.search(r"\b(?:wait|no|not|sorry|actually|but|instead|or)\b|[కాదు|మార్పు|చివర]", processed, re.IGNORECASE))
+
+    # Step 2: Check for explicit raw 10-digit patterns in text
+    raw_candidates = re.findall(r"\b(?:\+?91[\s-]?|0)?([6-9]\d{9})(?!\d)", processed)
+    if raw_candidates:
+        chosen = raw_candidates[-1]
+        # Check tail correction e.g. 'wait not 0, 1' or 'కాదు 1'
+        idx = processed.rfind(chosen)
+        if idx != -1:
+            tail = processed[idx + len(chosen):]
+            m_tail = re.search(
+                r"(?:not\s+\d+\s*[,]?\s*|last\s+digit\s+(?:is\s+)?|sorry\s+|కాదు\s+|actually\s+)([0-9]|one|two|three|four|five|six|seven|eight|nine|zero|ఒకటి|రెండు|మూడు|నాలుగు|ఐదు|ఆరు|ఏడు|ఎనిమిది|తొమ్మిది|సున్నా)",
+                tail,
+                re.IGNORECASE,
+            )
+            if m_tail:
+                val = m_tail.group(1).lower()
+                c_digit = SPOKEN_DIGIT_WORDS_MAP.get(val, val if val.isdigit() else None)
+                if c_digit:
+                    chosen = chosen[:-1] + c_digit
+        return chosen
+
+    # Fast rejection of over-length raw digit tokens when no correction keyword is present
+    for tok in re.findall(r"\d+", processed):
+        cleaned_tok = re.sub(r"^(?:91|0)", "", tok)
+        if len(cleaned_tok) > 10 and not has_correction:
+            return None
+
+    # Step 3: Tokenize words and numbers
     tokens = re.findall(r"[A-Za-z\u0C00-\u0C7F\u0900-\u097F\u0B80-\u0BFF\u0C80-\u0CFF\d]+", processed.lower())
     digits = []
     multiplier = 1
-    for tok in tokens:
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
         if tok in DOUBLE_TOKENS:
             multiplier = 2
+            i += 1
             continue
         elif tok in TRIPLE_TOKENS:
             multiplier = 3
+            i += 1
             continue
 
+        # Check for tens + unit word e.g. 'ninety eight' (98) or 'తొంభై ఎనిమిది' (98)
+        if tok in SPOKEN_TENS_WORDS_MAP and SPOKEN_TENS_WORDS_MAP[tok] >= 20 and i + 1 < len(tokens):
+            next_tok = tokens[i + 1]
+            if next_tok in SPOKEN_DIGIT_WORDS_MAP and SPOKEN_DIGIT_WORDS_MAP[next_tok] != "0":
+                val = SPOKEN_TENS_WORDS_MAP[tok] + int(SPOKEN_DIGIT_WORDS_MAP[next_tok])
+                for ch in str(val):
+                    digits.extend([ch] * multiplier)
+                multiplier = 1
+                i += 2
+                continue
+
+        # Standalone tens or teens (e.g. 'twenty' -> 20, 'fifteen' -> 15, 'పది' -> 10)
+        if tok in SPOKEN_TENS_WORDS_MAP:
+            for ch in str(SPOKEN_TENS_WORDS_MAP[tok]):
+                digits.extend([ch] * multiplier)
+            multiplier = 1
+            i += 1
+            continue
+
+        # Single spoken digit word (e.g. 'nine' -> 9, 'తొమ్మిది' -> 9)
         if tok in SPOKEN_DIGIT_WORDS_MAP:
             d = SPOKEN_DIGIT_WORDS_MAP[tok]
             digits.extend([d] * multiplier)
             multiplier = 1
-        elif tok.isdigit():
+            i += 1
+            continue
+
+        # Direct numeric digits inside token
+        if tok.isdigit():
             for char in tok:
                 digits.extend([char] * multiplier)
             multiplier = 1
+            i += 1
+            continue
+
+        i += 1
 
     digit_str = "".join(digits)
-    # Strip country code +91 or 91 if followed by 10 digits
-    if len(digit_str) == 12 and digit_str.startswith("91"):
+    # Strip country code +91 or 91 if followed by 10 digits starting with 6-9
+    if len(digit_str) == 12 and digit_str.startswith("91") and digit_str[2] in "6789":
         digit_str = digit_str[2:]
-    # Strip leading zero if followed by 10 digits
-    elif len(digit_str) == 11 and digit_str.startswith("0"):
+    # Strip leading trunk prefix 0 if followed by 10 digits starting with 6-9
+    elif len(digit_str) == 11 and digit_str.startswith("0") and digit_str[1] in "6789":
         digit_str = digit_str[1:]
 
-    # Require EXACTLY 10 digits
-    if len(digit_str) == 10:
+    # Require EXACTLY 10 digits starting with 6, 7, 8, or 9
+    if len(digit_str) == 10 and digit_str[0] in "6789":
         return digit_str
+
+    # If stream contains more digits (e.g. conversational correction), pick the last valid 10-digit Indian sequence
+    if has_correction and len(digit_str) > 10:
+        m = re.findall(r"[6-9]\d{9}", digit_str)
+        if m:
+            return m[-1]
+
     return None
 
 
 def normalize_phone(phone: str) -> str:
-    """Strips formatting, spoken words, and ensures strictly valid 10-digit phone representation."""
+    """Strips formatting, spoken words, and ensures valid 10-digit phone representation."""
     if not phone:
         return ""
     spoken = normalize_spoken_phone_number(phone)
@@ -143,7 +250,17 @@ def normalize_phone(phone: str) -> str:
         clean = clean[2:]
     elif len(clean) == 11 and clean.startswith("0"):
         clean = clean[1:]
-    return clean
+    if len(clean) == 10:
+        return clean
+    return ""
+
+
+def format_phone_grouped(phone: str) -> str:
+    """Formats a 10-digit mobile number into clean customary Indian grouping 'XXXXX XXXXX' (e.g. '98490 12345')."""
+    norm = normalize_phone(phone)
+    if len(norm) == 10:
+        return f"{norm[:5]} {norm[5:]}"
+    return phone.strip()
 
 
 def generate_unique_patient_reference(db: Session) -> str:

@@ -118,6 +118,7 @@ class AgentSessionState(BaseModel):
     cached_doctor_search: Optional[Dict[str, Any]] = None
     cached_slots: Optional[Dict[str, Any]] = None
     turn_tool_calls: List[ToolExecutionResult] = Field(default_factory=list)
+    spoken_reply: Optional[str] = None
 
     model_config = ConfigDict(extra="ignore")
 
@@ -140,6 +141,7 @@ class ChatResponse(BaseModel):
     confirmation_status: ConfirmationStatus
     tool_trace: List[ToolExecutionResult] = Field(default_factory=list)
     turn_tool_calls: List[ToolExecutionResult] = Field(default_factory=list)
+    spoken_reply: Optional[str] = None
     timings: Optional[Dict[str, float]] = None
     booked_appointment: Optional[Dict[str, Any]] = None
     suggested_options: Optional[List[Dict[str, str]]] = None

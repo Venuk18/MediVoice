@@ -154,8 +154,14 @@ def is_entity_only_or_patient_info(text: str) -> bool:
     # Patient registration / info only: 'my name is ...', 'name is ...', phone number, pat-ref
     if re.match(r"^(?:my\s+name\s+is|name\s+is|i\s+am)\s+[a-z]+(?:\s+[a-z]+)?$", clean):
         return True
-    if re.match(r"^\d{10}$", clean) or re.match(r"^pat-\d+-[a-z0-9-]+$", clean):
+    if re.match(r"^\+?[\d\s-]{10,15}$", clean) or re.match(r"^pat-\d+-[a-z0-9-]+$", clean):
         return True
+    try:
+        from app.services.patient_service import normalize_spoken_phone_number
+        if normalize_spoken_phone_number(clean) is not None:
+            return True
+    except Exception:
+        pass
 
     # Single-word conversational acknowledgments / affirmations (English, Telugu, Hindi, Tamil, Kannada)
     acknowledgments = {

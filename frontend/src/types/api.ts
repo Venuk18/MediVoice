@@ -410,6 +410,7 @@ export interface ChatResponsePayload {
   session_id: string;
   assistant_reply: string;
   reply?: string;
+  spoken_reply?: string | null;
   conversation_step: string;
   step?: string;
   confirmation_status: string;
@@ -466,6 +467,7 @@ export interface VoiceTurnResponse {
   gnani_stt_language?: string | null;
   session_id: string;
   reply: string;
+  spoken_reply?: string | null;
   assistant_reply?: string;
   language: string;
   language_mode?: string;

@@ -130,25 +130,25 @@ def test_extract_phone_number_candidate_with_spoken_indic():
 # -----------------------------------------------------------------------------
 def test_register_patient_identity_conflict_detection(db_session: Session):
     # Register original patient Sethu
-    p1 = register_patient(db_session, "Sethu", "1231231231")
+    p1 = register_patient(db_session, "Sethu", "9871231231")
     assert p1["is_new"] is True
     assert p1["full_name"] == "Sethu"
 
     # Now attempt registering Venu with the same phone number
-    p2 = register_patient(db_session, "Venu", "1231231231")
+    p2 = register_patient(db_session, "Venu", "9871231231")
     assert p2["is_new"] is False
     assert p2["identity_conflict"] is True
     assert p2["provided_name"] == "Venu"
     assert p2["full_name"] == "Sethu"
 
     # Attempt registering same person with alias (Sethu Kumar)
-    p3 = register_patient(db_session, "Sethu Kumar", "1231231231")
+    p3 = register_patient(db_session, "Sethu Kumar", "9871231231")
     assert p3["identity_conflict"] is False
 
 
 def test_conversation_identity_conflict_clarification_flow(db_session: Session, test_hospital_setup):
-    # Seed Sethu in database with phone 1231231231
-    register_patient(db_session, "Sethu", "1231231231")
+    # Seed Sethu in database with phone 9871231231
+    register_patient(db_session, "Sethu", "9871231231")
 
     cm = ConversationManager(adapter=MockReasoningAdapter())
     session_id = "test-session-identity-conflict"
@@ -165,7 +165,7 @@ def test_conversation_identity_conflict_clarification_flow(db_session: Session, 
     session.pending_action = "COLLECTING_NEW_PATIENT_PHONE"
 
     # User provides phone number that belongs to Sethu in database
-    res1 = cm.process_message(db_session, "My phone number is 1231231231", session_id=session_id)
+    res1 = cm.process_message(db_session, "My phone number is 9871231231", session_id=session_id)
     assert session.pending_action == "CLARIFY_PATIENT_IDENTITY_CONFLICT"
     assert "Sethu" in res1.reply
     assert "Venu" in res1.reply
