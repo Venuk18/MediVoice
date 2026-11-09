@@ -244,7 +244,24 @@ class ConversationManager:
                 reply = clarification_by_language.get(lang, clarification_by_language["en"])
                 session.history.append(ChatMessage(role="assistant", content=reply))
                 return self._build_response(session, sanitize_patient_facing_text(reply, lang))
-            elif session.step in (ConversationStep.COLLECTING_NAME, ConversationStep.COLLECTING_PHONE):
+            elif (
+                session.step in (
+                    ConversationStep.COLLECTING_NAME,
+                    ConversationStep.COLLECTING_PHONE,
+                    ConversationStep.COLLECTING_DETAILS,
+                    ConversationStep.NEW_PATIENT_REGISTRATION,
+                    ConversationStep.PATIENT_IDENTIFICATION,
+                    ConversationStep.EXISTING_PATIENT_VERIFICATION,
+                )
+                or session.pending_action in (
+                    "COLLECTING_NEW_PATIENT_NAME",
+                    "COLLECTING_EXISTING_PATIENT_NAME",
+                    "COLLECTING_NEW_PATIENT_PHONE",
+                    "COLLECTING_EXISTING_PATIENT_PHONE",
+                    "COLLECTING_EXISTING_PATIENT_REF",
+                    "AWAITING_PATIENT_STATUS",
+                )
+            ):
                 reg_clarification = {
                     "en": "I'm sorry, I couldn't hear that clearly. Please state your name or 10-digit phone number clearly.",
                     "te": "క్షమించండి, మీ వివరాలు స్పష్టంగా వినిపించలేదు. దయచేసి మీ పేరు లేదా 10 అంకెల ఫోన్ నంబర్‌ను మళ్ళీ స్పష్టంగా చెప్పండి.",

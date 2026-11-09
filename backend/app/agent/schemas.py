@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import Enum
 import hashlib
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator, field_validator
 
 
 class ConversationStep(str, Enum):
@@ -19,6 +19,9 @@ class ConversationStep(str, Enum):
     NEW_PATIENT_REGISTRATION = "NEW_PATIENT_REGISTRATION"
     EXISTING_PATIENT_VERIFICATION = "EXISTING_PATIENT_VERIFICATION"
     REVIEWING_APPOINTMENT = "REVIEWING_APPOINTMENT"
+    # Registration & detail collection compatibility states
+    COLLECTING_NAME = "COLLECTING_NAME"
+    COLLECTING_PHONE = "COLLECTING_PHONE"
 
 
 class ConfirmationStatus(str, Enum):
@@ -122,6 +125,22 @@ class AgentSessionState(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    @field_validator("step", mode="before")
+    @classmethod
+    def validate_step(cls, v: Any) -> ConversationStep:
+        if isinstance(v, ConversationStep):
+            return v
+        if isinstance(v, str):
+            try:
+                return ConversationStep(v)
+            except ValueError:
+                v_clean = v.strip().upper()
+                for member in ConversationStep:
+                    if member.name == v_clean or member.value == v_clean:
+                        return member
+                return ConversationStep.GREETING
+        return ConversationStep.GREETING
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -153,6 +172,22 @@ class ChatResponse(BaseModel):
     tool_calls: Optional[List[ToolExecutionResult]] = None
 
     model_config = ConfigDict(extra="ignore")
+
+    @field_validator("step", mode="before")
+    @classmethod
+    def validate_step(cls, v: Any) -> ConversationStep:
+        if isinstance(v, ConversationStep):
+            return v
+        if isinstance(v, str):
+            try:
+                return ConversationStep(v)
+            except ValueError:
+                v_clean = v.strip().upper()
+                for member in ConversationStep:
+                    if member.name == v_clean or member.value == v_clean:
+                        return member
+                return ConversationStep.GREETING
+        return ConversationStep.GREETING
 
     @model_validator(mode="after")
     def populate_compatibility_aliases(self) -> "ChatResponse":
